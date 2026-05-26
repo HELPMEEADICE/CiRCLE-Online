@@ -28,6 +28,10 @@
                     <span class="nav-icon material-icons-round">psychology</span>
                     <span class="nav-label">LLM 配置</span>
                 </button>
+                <button class="nav-item" data-page="chat" onclick="app.navigateTo('chat')">
+                    <span class="nav-icon material-icons-round">chat</span>
+                    <span class="nav-label">聊天配置</span>
+                </button>
             </div>
             <div class="nav-footer">
                 <div class="nav-status" id="globalStatus">
@@ -252,7 +256,7 @@
                     </div>
                 </div>
 
-                <!-- LLM Config Page -->
+<!-- LLM Config Page -->
                 <div class="page" id="page-llm">
                     <div class="settings-page">
                         <div class="settings-card">
@@ -364,8 +368,12 @@
                                         </div>
                                         <div class="preview-block fixed-block">
                                             <span class="preview-tag">固定提示词</span>
-                                            <pre>请以角色的身份回复。保持角色的性格特点和说话风格。
-回复要自然、简洁，符合群聊场景。不要暴露你是AI。</pre>
+                                            <pre>【群聊对话行为规范（请严格执行）：说明：由于你当前处于高频互动的群聊场景中，请彻底放弃传统AI长篇大论的回答模式，完全切换为高仿真的群聊短打发言风格：
+1. 单次发言字数：每条回复必须极其精炼，绝对不能超过两句话（控制在30字以内最好）。能用一两个词或短句表达的，绝不多说一个字。
+2. 严禁使用任何Markdown格式：不要使用粗体、斜体、列表、井号、分割线、代码块等任何富文本排版。如果需要强调，直接使用文字或语气助词。
+3. 严禁一次性输出大段文本：禁止使用"首先、其次、最后"、"第一点、第二点"等结构化排版和分段。
+4. 语言口语化：多用网络语气助词、缩写或随意的标点符号（如……、，、哈、嘛），甚至可以不用句号，就像手机打字一样。
+5. 互动逻辑：每次只接当前最新的一句话，或者抛出一个简短的疑问/吐槽，把接话的机会留给其他人，制造正在实时打字聊天的碎屑感。】</pre>
                                         </div>
                                         <div class="preview-block suffix-block">
                                             <span class="preview-tag">后置注入</span>
@@ -398,6 +406,87 @@
                                     <button class="md3-btn md3-btn-filled" onclick="app.savePromptConfig()">
                                         <span class="material-icons-round">save</span>
                                         保存提示词配置
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chat Config Page -->
+                <div class="page" id="page-chat">
+                    <div class="settings-page">
+                        <div class="settings-card">
+                            <div class="settings-card-header">
+                                <span class="material-icons-round">admin_panel_settings</span>
+                                <div>
+                                    <h3>管理员配置</h3>
+                                    <p class="settings-subtitle">设置管理员QQ号</p>
+                                </div>
+                            </div>
+                            <div class="settings-body">
+                                <div class="md3-field">
+                                    <label class="md3-label">管理员QQ号</label>
+                                    <input type="text" class="md3-input" id="cfg-admin_qq" placeholder="请输入管理员QQ号">
+                                    <span class="md3-helper">管理员可以使用特殊命令控制机器人</span>
+                                </div>
+                                <div class="settings-actions">
+                                    <button class="md3-btn md3-btn-filled" onclick="app.saveChatConfig()">
+                                        <span class="material-icons-round">save</span>
+                                        保存配置
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="settings-card">
+                            <div class="settings-card-header">
+                                <span class="material-icons-round">group</span>
+                                <div>
+                                    <h3>主群聊配置</h3>
+                                    <p class="settings-subtitle">设置主要活动群聊</p>
+                                </div>
+                            </div>
+                            <div class="settings-body">
+                                <div class="md3-field">
+                                    <label class="md3-label">主群聊ID</label>
+                                    <input type="text" class="md3-input" id="cfg-main_group_id" placeholder="请输入主群聊的群号">
+                                    <span class="md3-helper">在主群聊中将启用完整RP功能（自动触发、自动回应等）</span>
+                                </div>
+                                <div class="settings-actions">
+                                    <button class="md3-btn md3-btn-filled" onclick="app.saveChatConfig()">
+                                        <span class="material-icons-round">save</span>
+                                        保存配置
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="settings-card">
+                            <div class="settings-card-header">
+                                <span class="material-icons-round">mail</span>
+                                <div>
+                                    <h3>私信配置</h3>
+                                    <p class="settings-subtitle">控制私信功能开关</p>
+                                </div>
+                            </div>
+                            <div class="settings-body">
+                                <div class="md3-field">
+                                    <div class="md3-switch-row">
+                                        <div>
+                                            <label class="md3-label">启用私信功能</label>
+                                            <span class="md3-helper" style="margin-top:4px">允许任何用户私信角色QQ号，按照人设进行回复</span>
+                                        </div>
+                                        <label class="md3-switch">
+                                            <input type="checkbox" id="cfg-private_message_enabled">
+                                            <span class="slider"></span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="settings-actions">
+                                    <button class="md3-btn md3-btn-filled" onclick="app.saveChatConfig()">
+                                        <span class="material-icons-round">save</span>
+                                        保存配置
                                     </button>
                                 </div>
                             </div>

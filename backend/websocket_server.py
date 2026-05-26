@@ -1,4 +1,5 @@
 import asyncio
+import http
 import json
 import uuid
 from typing import Optional, Callable, Any
@@ -7,6 +8,7 @@ from backend.models import ConnectionStatus, PortInfo
 from backend.utils import get_logger
 import urllib.parse
 import websockets.exceptions
+from websockets.datastructures import Headers
 
 logger = get_logger("websocket_server")
 
@@ -30,7 +32,10 @@ class NapCatConnection:
             echo = str(uuid.uuid4())
             payload["echo"] = echo
 
-        await self.websocket.send_json(payload)
+        if hasattr(self.websocket, 'send_json'):
+            await self.websocket.send_json(payload)
+        else:
+            await self.websocket.send(json.dumps(payload))
 
         if echo and timeout > 0:
             future: asyncio.Future = asyncio.get_running_loop().create_future()
@@ -128,7 +133,7 @@ class MultiPortWebSocketServer:
         return result
 
     async def start_servers(self):
-        import websockets
+        from websockets.legacy.server import serve
         import logging
 
         ws_logger = logging.getLogger("websockets.server")
@@ -137,7 +142,7 @@ class MultiPortWebSocketServer:
         for i in range(self.num_ports):
             port = self.base_port + i
             try:
-                server = await websockets.serve(
+                server = await serve(
                     lambda ws, p=port: self._handle_ws_connection(p, ws),
                     self.host,
                     port,
@@ -151,7 +156,11 @@ class MultiPortWebSocketServer:
 
     async def _process_request(self, path, request_headers):
         if "Upgrade" not in request_headers or request_headers["Upgrade"].lower() != "websocket":
-            return "HTTP/1.1 426 Upgrade Required\r\n\r\n", None
+            return (
+                http.HTTPStatus.UPGRADE_REQUIRED,
+                Headers([("Upgrade", "websocket")]),
+                b"Upgrade to WebSocket required.\n",
+            )
         return None
 
     async def _validate_token(self, port: int, websocket) -> bool:
@@ -160,16 +169,27 @@ class MultiPortWebSocketServer:
         if not required_token:
             return True
 
-        path = websocket.request.path if hasattr(websocket, 'request') else "/"
+        # Support both FastAPI WebSocket and websockets WebSocketServerProtocol
+        if hasattr(websocket, 'request'):
+            # FastAPI WebSocket
+            path = websocket.request.path if hasattr(websocket.request, 'path') else "/"
+            headers = websocket.request.headers if hasattr(websocket.request, 'headers') else {}
+        elif hasattr(websocket, 'path'):
+            # websockets WebSocketServerProtocol
+            path = websocket.path or "/"
+            headers = websocket.request_headers if hasattr(websocket, 'request_headers') else {}
+        else:
+            path = "/"
+            headers = {}
+
         query_string = urllib.parse.urlparse(path).query if path else ""
         query_params = urllib.parse.parse_qs(query_string)
         token_from_query = query_params.get("access_token", [None])[0]
 
         token_from_header = None
-        if hasattr(websocket, 'request') and hasattr(websocket.request, 'headers'):
-            auth_header = websocket.request.headers.get("Authorization", "")
-            if auth_header.startswith("Bearer "):
-                token_from_header = auth_header[7:]
+        auth_header = headers.get("Authorization", "") if headers else ""
+        if auth_header.startswith("Bearer "):
+            token_from_header = auth_header[7:]
 
         if token_from_query == required_token or token_from_header == required_token:
             return True

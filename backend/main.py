@@ -11,6 +11,7 @@ from backend.websocket_server import MultiPortWebSocketServer
 from backend.napcat_handler import NapCatMessageHandler
 from backend.orchestrator import orchestrator
 from backend.character_manager import character_manager
+from backend.llm_client import llm_client
 from backend.utils import setup_logging, get_logger
 
 logger = get_logger("main")
@@ -250,6 +251,11 @@ async def get_config():
             "prompt_suffix": cfg.orchestrator.prompt_suffix,
             "time_awareness": cfg.orchestrator.time_awareness,
         },
+        "chat": {
+            "admin_qq": cfg.chat.admin_qq,
+            "main_group_id": cfg.chat.main_group_id,
+            "private_message_enabled": cfg.chat.private_message_enabled,
+        },
         "logging": {
             "level": cfg.logging.level,
             "file": cfg.logging.file,
@@ -285,10 +291,17 @@ class OrchestratorConfigUpdate(BaseModel):
     time_awareness: bool = None
 
 
+class ChatConfigUpdate(BaseModel):
+    admin_qq: str = None
+    main_group_id: str = None
+    private_message_enabled: bool = None
+
+
 class ConfigUpdate(BaseModel):
     server: ServerConfigUpdate = None
     llm: LLMConfigUpdate = None
     orchestrator: OrchestratorConfigUpdate = None
+    chat: ChatConfigUpdate = None
 
 
 @app.post("/api/config")
@@ -306,13 +319,16 @@ async def update_config(update: ConfigUpdate):
         if update.server.management_port is not None:
             current.server.management_port = update.server.management_port
 
+    llm_changed = False
     if update.llm:
         if update.llm.provider is not None:
             current.llm.provider = update.llm.provider
         if update.llm.api_key is not None:
             current.llm.api_key = update.llm.api_key
+            llm_changed = True
         if update.llm.base_url is not None:
             current.llm.base_url = update.llm.base_url
+            llm_changed = True
         if update.llm.model is not None:
             current.llm.model = update.llm.model
         if update.llm.assistant_model is not None:
@@ -340,10 +356,23 @@ async def update_config(update: ConfigUpdate):
         if update.orchestrator.time_awareness is not None:
             current.orchestrator.time_awareness = update.orchestrator.time_awareness
 
-    save_config(current)
-    config = current
+    if update.chat:
+        if update.chat.admin_qq is not None:
+            current.chat.admin_qq = update.chat.admin_qq
+        if update.chat.main_group_id is not None:
+            current.chat.main_group_id = update.chat.main_group_id
+        if update.chat.private_message_enabled is not None:
+            current.chat.private_message_enabled = update.chat.private_message_enabled
 
-    return {"success": True, "message": "配置已保存，重启服务后生效"}
+    save_config(current)
+    # Update the global config object in-place so all modules see the changes
+    config.__dict__.update(current.__dict__)
+
+    # Reinitialize LLM client if API key or base URL changed
+    if llm_changed:
+        llm_client.reinitialize()
+
+    return {"success": True, "message": "配置已保存"}
 
 
 class AutoDialogueConfigUpdate(BaseModel):
@@ -387,9 +416,9 @@ async def update_auto_dialogue_config(update: AutoDialogueConfigUpdate):
         current.orchestrator.auto_dialogue.initiation_interval_ms = update.initiation_interval_ms
 
     save_config(current)
-    config = current
+    config.__dict__.update(current.__dict__)
 
-    return {"success": True, "message": "自动对话配置已保存，重启服务后生效"}
+    return {"success": True, "message": "自动对话配置已保存"}
 
 
 @app.post("/api/orchestrator/auto-dialogue/toggle")
@@ -398,8 +427,36 @@ async def toggle_auto_dialogue():
     current = load_config()
     current.orchestrator.auto_dialogue.enabled = not current.orchestrator.auto_dialogue.enabled
     save_config(current)
-    config = current
+    config.__dict__.update(current.__dict__)
     return {"enabled": config.orchestrator.auto_dialogue.enabled}
+
+
+@app.get("/api/chat/config")
+async def get_chat_config():
+    cfg = load_config()
+    return {
+        "admin_qq": cfg.chat.admin_qq,
+        "main_group_id": cfg.chat.main_group_id,
+        "private_message_enabled": cfg.chat.private_message_enabled,
+    }
+
+
+@app.post("/api/chat/config")
+async def update_chat_config(update: ChatConfigUpdate):
+    global config
+    current = load_config()
+
+    if update.admin_qq is not None:
+        current.chat.admin_qq = update.admin_qq
+    if update.main_group_id is not None:
+        current.chat.main_group_id = update.main_group_id
+    if update.private_message_enabled is not None:
+        current.chat.private_message_enabled = update.private_message_enabled
+
+    save_config(current)
+    config.__dict__.update(current.__dict__)
+
+    return {"success": True, "message": "聊天配置已保存"}
 
 
 def run():

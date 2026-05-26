@@ -4,6 +4,7 @@ const PAGE_TITLES = {
     dashboard: '仪表盘',
     server: '本地参数配置',
     llm: 'LLM 配置',
+    chat: '聊天配置',
 };
 
 class CircleOnlineApp {
@@ -266,6 +267,16 @@ class CircleOnlineApp {
             this.setField('cfg-auto_dialogue_initiation_interval_ms', c.orchestrator.auto_dialogue.initiation_interval_ms);
         }
 
+        // Chat config
+        if (c.chat) {
+            this.setField('cfg-admin_qq', c.chat.admin_qq);
+            this.setField('cfg-main_group_id', c.chat.main_group_id);
+            const privateMsgEnabled = document.getElementById('cfg-private_message_enabled');
+            if (privateMsgEnabled) {
+                privateMsgEnabled.checked = c.chat.private_message_enabled;
+            }
+        }
+
         this.updatePreview();
     }
 
@@ -361,6 +372,28 @@ class CircleOnlineApp {
             // Update toggle label
             document.getElementById('autoDialogueToggleLabel').textContent = 
                 autoEnabled ? '已启用' : '已禁用';
+        } catch (error) {
+            this.showToast('保存失败: ' + error.message, 'error');
+        }
+    }
+
+    async saveChatConfig() {
+        const privateMsgEnabled = document.getElementById('cfg-private_message_enabled')?.checked;
+        const payload = {
+            admin_qq: this.getField('cfg-admin_qq'),
+            main_group_id: this.getField('cfg-main_group_id'),
+            private_message_enabled: privateMsgEnabled,
+        };
+        
+        try {
+            const response = await fetch(`${API_BASE}/api/chat/config`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (!response.ok) throw new Error('Save failed');
+            const data = await response.json();
+            this.showToast(data.message || '聊天配置已保存', 'success');
         } catch (error) {
             this.showToast('保存失败: ' + error.message, 'error');
         }

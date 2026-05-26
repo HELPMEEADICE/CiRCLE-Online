@@ -39,6 +39,12 @@ class AutoDialogueConfig(BaseSettings):
     initiation_interval_ms: int = 600000
 
 
+class ChatConfig(BaseSettings):
+    admin_qq: str = ""
+    main_group_id: str = ""
+    private_message_enabled: bool = False
+
+
 class ContextCompressionConfig(BaseSettings):
     enabled: bool = True
     target_tokens: int = 2048
@@ -68,6 +74,7 @@ class AppConfig(BaseSettings):
     server: ServerConfig = Field(default_factory=ServerConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     orchestrator: OrchestratorConfig = Field(default_factory=OrchestratorConfig)
+    chat: ChatConfig = Field(default_factory=ChatConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
 
@@ -95,12 +102,14 @@ def load_config() -> AppConfig:
     llm_cfg = LLMConfig(**llm_raw)
 
     orchestrator_cfg = OrchestratorConfig(**raw.get("orchestrator", {}))
+    chat_cfg = ChatConfig(**raw.get("chat", {}))
     logging_cfg = LoggingConfig(**raw.get("logging", {}))
 
     return AppConfig(
         server=server_cfg,
         llm=llm_cfg,
         orchestrator=orchestrator_cfg,
+        chat=chat_cfg,
         logging=logging_cfg,
     )
 
@@ -176,6 +185,12 @@ def save_config(app_config: AppConfig):
     lines.append(f"trigger_probability = {app_config.orchestrator.auto_dialogue.trigger_probability}")
     lines.append(f"initiation_probability = {app_config.orchestrator.auto_dialogue.initiation_probability}")
     lines.append(f"initiation_interval_ms = {app_config.orchestrator.auto_dialogue.initiation_interval_ms}")
+    lines.append("")
+
+    lines.append("[chat]")
+    lines.append(f'admin_qq = "{app_config.chat.admin_qq}"')
+    lines.append(f'main_group_id = "{app_config.chat.main_group_id}"')
+    lines.append(f"private_message_enabled = {'true' if app_config.chat.private_message_enabled else 'false'}")
     lines.append("")
 
     lines.append("[logging]")

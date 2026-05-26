@@ -15,6 +15,7 @@ class LLMClient:
         self._init_client()
 
     def _init_client(self):
+        from backend.config import config
         api_key = config.llm.api_key
         base_url = config.llm.base_url
 
@@ -27,6 +28,10 @@ class LLMClient:
             base_url=base_url,
         )
         logger.info(f"LLM client initialized: {config.llm.provider} @ {base_url}")
+
+    def reinitialize(self):
+        self._client = None
+        self._init_client()
 
     @property
     def is_available(self) -> bool:
@@ -96,8 +101,12 @@ class LLMClient:
 
         system_prompt = f"""{prefix}
 {character_prompt}
-请以角色的身份回复。保持角色的性格特点和说话风格。
-回复要自然、简洁，符合群聊场景。不要暴露你是AI。
+【群聊对话行为规范（请严格执行）：说明：由于你当前处于高频互动的群聊场景中，请彻底放弃传统AI长篇大论的回答模式，完全切换为高仿真的群聊短打发言风格：
+1. 单次发言字数：每条回复必须极其精炼，绝对不能超过两句话（控制在30字以内最好）。能用一两个词或短句表达的，绝不多说一个字。
+2. 严禁使用任何Markdown格式：不要使用粗体、斜体、列表、井号、分割线、代码块等任何富文本排版。如果需要强调，直接使用文字或语气助词。
+3. 严禁一次性输出大段文本：禁止使用“首先、其次、最后”、“第一点、第二点”等结构化排版和分段。
+4. 语言口语化：多用网络语气助词、缩写或随意的标点符号（如……、，、哈、嘛），甚至可以不用句号，就像手机打字一样。
+5. 互动逻辑：每次只接当前最新的一句话，或者抛出一个简短的疑问/吐槽，把接话的机会留给其他人，制造正在实时打字聊天的碎屑感。】
 {suffix}{time_note}"""
 
         return await self.generate_response(system_prompt, messages, thinking=config.llm.model_thinking)
