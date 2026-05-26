@@ -25,6 +25,9 @@ msg_handler: NapCatMessageHandler = None
 async def on_ws_status_change(event: str, port: int, qq_id: str = None):
     if event == "identified" and qq_id:
         logger.info(f"Port {port} identified as QQ {qq_id}")
+        character_name = orchestrator.get_assignment(port)
+        if character_name:
+            orchestrator.register_bot_qq(qq_id, character_name)
     elif event in ("connected", "disconnected"):
         logger.info(f"Port {port} {event}")
 

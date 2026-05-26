@@ -109,6 +109,7 @@ class Orchestrator:
         self._ws_server = None
         self._load_assignments()
 
+        self._bot_qq_map: dict[str, str] = {}  # QQ ID -> character name
         self._chain_counters: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
         self._last_ai_reply_time: dict[str, dict[str, datetime]] = defaultdict(lambda: defaultdict(datetime.min))
         self._last_initiation_time: dict[str, datetime] = defaultdict(lambda: datetime.min)
@@ -124,6 +125,13 @@ class Orchestrator:
 
     def set_ws_server(self, ws_server):
         self._ws_server = ws_server
+
+    def register_bot_qq(self, qq_id: str, character_name: str):
+        self._bot_qq_map[qq_id] = character_name
+        logger.info(f"Registered bot QQ {qq_id} -> character: {character_name}")
+
+    def get_character_by_qq_id(self, qq_id: str) -> Optional[str]:
+        return self._bot_qq_map.get(qq_id)
 
     @property
     def enabled(self) -> bool:
@@ -194,6 +202,10 @@ class Orchestrator:
 
         sender = data.get("sender", {})
         sender_name = sender.get("card", "") or sender.get("nickname", "")
+
+        bot_character = self.get_character_by_qq_id(user_id)
+        if bot_character:
+            sender_name = f"[Poppin'Party成员] {bot_character}"
 
         session = self._group_sessions[group_id][character_name]
         session.add(ChatMessage(
