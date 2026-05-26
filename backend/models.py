@@ -70,6 +70,9 @@ class ChatMessage(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now)
     character: Optional[str] = None
     qq_id: Optional[str] = None
+    raw_content: Optional[str] = None
+    is_bot: bool = False
+    sender_name: Optional[str] = None
 
 
 class CharacterAssignment(BaseModel):

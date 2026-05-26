@@ -13,6 +13,7 @@ from backend.orchestrator import orchestrator
 from backend.character_manager import character_manager
 from backend.llm_client import llm_client
 from backend.utils import setup_logging, get_logger
+from backend.database import db
 
 logger = get_logger("main")
 
@@ -37,6 +38,9 @@ async def lifespan(app: FastAPI):
     global ws_server, msg_handler
 
     setup_logging(config.logging.level)
+
+    # Initialize database for persistent chat history
+    await orchestrator.init_db()
 
     # Load port configurations
     port_configs = load_port_assignments()
@@ -65,6 +69,7 @@ async def lifespan(app: FastAPI):
 
     logger.info("Shutting down...")
     await ws_server.stop_servers()
+    await db.close()
 
 
 app = FastAPI(title="CiRCLE Online", version="1.0.0", lifespan=lifespan)

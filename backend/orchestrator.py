@@ -9,29 +9,65 @@ from backend.llm_client import llm_client
 from backend.character_manager import character_manager
 from backend.token_counter import count_message_tokens, count_single_message_tokens, truncate_messages_to_token_budget
 from backend.utils import get_logger, parse_message_text, build_text_message, extract_image_urls
+from backend.database import db
 
 logger = get_logger("orchestrator")
 
 
 class SessionMemory:
-    """Token-aware session memory with automatic compression via auxiliary model."""
+    """Persistent token-aware session memory backed by SQLite."""
 
-    def __init__(self, max_messages: int = 20, max_tokens: int = 4096):
+    def __init__(self, session_key: str, max_messages: int = 20, max_tokens: int = 4096):
+        self.session_key = session_key
         self.messages: list[ChatMessage] = []
+        self._db_ids: list[int] = []
         self.max_messages = max_messages
         self.max_tokens = max_tokens
         self._total_tokens: int = 0
         self._compressing: bool = False
 
-    def add(self, message: ChatMessage):
+    async def init_from_db(self):
+        rows = await db.load_messages(self.session_key)
+        for row in rows:
+            msg = ChatMessage(
+                role=row["role"],
+                content=row["content"],
+                timestamp=datetime.fromtimestamp(row["timestamp"]),
+                character=row["character"],
+                qq_id=row["qq_id"],
+                raw_content=row["raw_content"],
+                is_bot=bool(row["is_bot"]),
+                sender_name=row["sender_name"],
+            )
+            self.messages.append(msg)
+            self._db_ids.append(row["id"])
+        self._total_tokens = count_message_tokens(self.messages)
+        logger.info(f"Loaded {len(self.messages)} msgs for session '{self.session_key}'")
+
+    async def add(self, message: ChatMessage):
         msg_tokens = count_single_message_tokens(message)
         self.messages.append(message)
         self._total_tokens += msg_tokens
 
+        db_id = await db.save_message(
+            session_key=self.session_key,
+            role=message.role,
+            content=message.content,
+            raw_content=message.raw_content,
+            qq_id=message.qq_id,
+            character=message.character,
+            is_bot=message.is_bot,
+            sender_name=message.sender_name,
+            timestamp=message.timestamp.timestamp(),
+        )
+        self._db_ids.append(db_id)
+
         if len(self.messages) > self.max_messages:
-            removed = self.messages[:-self.max_messages]
+            removed_ids = self._db_ids[:-self.max_messages]
             self.messages = self.messages[-self.max_messages:]
+            self._db_ids = self._db_ids[-self.max_messages:]
             self._total_tokens = count_message_tokens(self.messages)
+            await db.delete_messages_by_ids(removed_ids)
 
         if self._total_tokens > self.max_tokens and not self._compressing:
             self._compressing = True
@@ -39,7 +75,7 @@ class SessionMemory:
                 loop = asyncio.get_running_loop()
                 loop.create_task(self._compress())
             except RuntimeError:
-                self._truncate_sync()
+                await self._truncate_async()
 
     async def _compress(self):
         compression_cfg = config.orchestrator.context_compression
@@ -51,6 +87,8 @@ class SessionMemory:
 
         old_messages = self.messages[:-reserve]
         recent_messages = self.messages[-reserve:]
+        old_db_ids = self._db_ids[:-reserve]
+        recent_db_ids = self._db_ids[-reserve:]
 
         character_name = ""
         for msg in reversed(self.messages):
@@ -65,19 +103,36 @@ class SessionMemory:
         )
 
         if summary_msg:
+            await db.delete_messages_by_ids(old_db_ids)
+
+            summary_db_id = await db.save_message(
+                session_key=self.session_key,
+                role=summary_msg.role,
+                content=summary_msg.content,
+                raw_content=summary_msg.raw_content,
+                timestamp=summary_msg.timestamp.timestamp(),
+            )
+
             self.messages = [summary_msg] + recent_messages
+            self._db_ids = [summary_db_id] + recent_db_ids
             self._total_tokens = count_message_tokens(self.messages)
             logger.info(
                 f"Context compressed: {len(old_messages)} msgs -> 1 summary, "
                 f"total tokens now {self._total_tokens}"
             )
         else:
-            self._truncate_sync()
+            await self._truncate_async()
 
         self._compressing = False
 
-    def _truncate_sync(self):
-        self.messages = truncate_messages_to_token_budget(self.messages, self.max_tokens)
+    async def _truncate_async(self):
+        kept = truncate_messages_to_token_budget(self.messages, self.max_tokens)
+        removed_count = len(self.messages) - len(kept)
+        if removed_count > 0:
+            removed_ids = self._db_ids[:removed_count]
+            await db.delete_messages_by_ids(removed_ids)
+            self._db_ids = self._db_ids[removed_count:]
+        self.messages = kept
         self._total_tokens = count_message_tokens(self.messages)
         logger.warning(f"Context truncated to {len(self.messages)} msgs, {self._total_tokens} tokens")
 
@@ -86,34 +141,90 @@ class SessionMemory:
             return self.messages[-last_n:]
         return self.messages.copy()
 
+    def get_context_for_character(self, character_name: str, bot_qq_map: dict[str, str]) -> list[ChatMessage]:
+        """Transform messages for a specific character's perspective.
+
+        - Own messages (this character's QQ) -> [你]: raw_content
+        - Other bot messages -> [Poppin'Party成员] {char_name}: raw_content
+        - Human messages -> [sender_name]: raw_content  (unchanged)
+        - System messages -> unchanged
+        """
+        own_qq_id = None
+        for qq_id, name in bot_qq_map.items():
+            if name == character_name:
+                own_qq_id = qq_id
+                break
+
+        result = []
+        for msg in self.messages:
+            if msg.role == "system":
+                result.append(msg)
+                continue
+
+            if msg.role == "assistant":
+                result.append(msg)
+                continue
+
+            raw = msg.raw_content if msg.raw_content is not None else msg.content
+
+            if msg.qq_id and msg.qq_id == own_qq_id:
+                transformed = ChatMessage(
+                    role="user",
+                    content=f"[你]: {raw}",
+                    timestamp=msg.timestamp,
+                    qq_id=msg.qq_id,
+                    character=msg.character,
+                    raw_content=raw,
+                    is_bot=msg.is_bot,
+                    sender_name="你",
+                )
+            elif msg.is_bot and msg.sender_name:
+                other_char = bot_qq_map.get(msg.qq_id, msg.sender_name)
+                transformed = ChatMessage(
+                    role="user",
+                    content=f"[Poppin'Party成员] {other_char}: {raw}",
+                    timestamp=msg.timestamp,
+                    qq_id=msg.qq_id,
+                    character=msg.character,
+                    raw_content=raw,
+                    is_bot=True,
+                    sender_name=f"[Poppin'Party成员] {other_char}",
+                )
+            else:
+                result.append(msg)
+                continue
+
+            result.append(transformed)
+
+        return result
+
     def get_token_count(self) -> int:
         return self._total_tokens
 
-    def clear(self):
+    async def clear(self):
         self.messages.clear()
+        self._db_ids.clear()
         self._total_tokens = 0
+        await db.clear_session(self.session_key)
 
 
 class Orchestrator:
     def __init__(self):
         self._enabled = config.orchestrator.enabled
         self._assignments: dict[int, str] = {}
-        self._sessions: dict[int, SessionMemory] = defaultdict(
-            lambda: SessionMemory(config.orchestrator.max_context_messages, config.orchestrator.max_context_tokens)
-        )
-        self._group_sessions: dict[str, dict[str, SessionMemory]] = defaultdict(
-            lambda: defaultdict(
-                lambda: SessionMemory(config.orchestrator.max_context_messages, config.orchestrator.max_context_tokens)
-            )
-        )
+        self._group_sessions: dict[str, SessionMemory] = {}
+        self._private_sessions: dict[str, SessionMemory] = {}
         self._ws_server = None
         self._load_assignments()
 
-        self._bot_qq_map: dict[str, str] = {}  # QQ ID -> character name
+        self._bot_qq_map: dict[str, str] = {}
         self._chain_counters: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
         self._last_ai_reply_time: dict[str, dict[str, datetime]] = defaultdict(lambda: defaultdict(datetime.min))
         self._last_initiation_time: dict[str, datetime] = defaultdict(lambda: datetime.min)
         self._initiation_task: Optional[asyncio.Task] = None
+
+    async def init_db(self):
+        await db.init_db()
 
     def _load_assignments(self):
         port_configs = load_port_assignments()
@@ -168,6 +279,29 @@ class Orchestrator:
     def get_all_assignments(self) -> dict[int, str]:
         return self._assignments.copy()
 
+    async def _get_group_session(self, group_id: str) -> SessionMemory:
+        if group_id not in self._group_sessions:
+            session = SessionMemory(
+                session_key=f"group_{group_id}",
+                max_messages=config.orchestrator.max_context_messages,
+                max_tokens=config.orchestrator.max_context_tokens,
+            )
+            await session.init_from_db()
+            self._group_sessions[group_id] = session
+        return self._group_sessions[group_id]
+
+    async def _get_private_session(self, user_id: str, character_name: str) -> SessionMemory:
+        session_key = f"private_{user_id}_{character_name}"
+        if session_key not in self._private_sessions:
+            session = SessionMemory(
+                session_key=session_key,
+                max_messages=config.orchestrator.max_context_messages,
+                max_tokens=config.orchestrator.max_context_tokens,
+            )
+            await session.init_from_db()
+            self._private_sessions[session_key] = session
+        return self._private_sessions[session_key]
+
     async def handle_group_message(self, port: int, data: dict):
         if not self._enabled:
             return
@@ -204,15 +338,24 @@ class Orchestrator:
         sender_name = sender.get("card", "") or sender.get("nickname", "")
 
         bot_character = self.get_character_by_qq_id(user_id)
-        if bot_character:
-            sender_name = f"[Poppin'Party成员] {bot_character}"
+        is_bot = bot_character is not None
+        if is_bot:
+            sender_name = bot_character
 
-        session = self._group_sessions[group_id][character_name]
-        session.add(ChatMessage(
+        session = await self._get_group_session(group_id)
+
+        display_content = f"[{sender_name}]: {raw_message}"
+        if is_bot:
+            display_content = f"[Poppin'Party成员] {sender_name}: {raw_message}"
+
+        await session.add(ChatMessage(
             role="user",
-            content=f"[{sender_name}]: {raw_message}",
+            content=display_content,
+            raw_content=raw_message,
             qq_id=user_id,
             character=character_name,
+            is_bot=is_bot,
+            sender_name=sender_name,
         ))
 
         should_reply = self._should_reply(raw_message, character_name)
@@ -226,7 +369,7 @@ class Orchestrator:
             logger.warning(f"No system prompt for character: {character_name}")
             return
 
-        context = session.get_context()
+        context = session.get_context_for_character(character_name, self._bot_qq_map)
         response = await llm_client.generate_roleplay_response(
             character_prompt=system_prompt,
             context=context,
@@ -235,7 +378,7 @@ class Orchestrator:
         )
 
         if response:
-            session.add(ChatMessage(
+            await session.add(ChatMessage(
                 role="assistant",
                 content=response,
                 character=character_name,
@@ -278,11 +421,11 @@ class Orchestrator:
                 vision_text = " ".join(vision_descriptions)
                 raw_message = f"{raw_message} [图片内容: {vision_text}]" if raw_message else f"[图片内容: {vision_text}]"
 
-        session_key = f"private_{user_id}_{character_name}"
-        session = self._sessions[session_key]
-        session.add(ChatMessage(
+        session = await self._get_private_session(user_id, character_name)
+        await session.add(ChatMessage(
             role="user",
             content=raw_message,
+            raw_content=raw_message,
             qq_id=user_id,
             character=character_name,
         ))
@@ -300,7 +443,7 @@ class Orchestrator:
         )
 
         if response:
-            session.add(ChatMessage(
+            await session.add(ChatMessage(
                 role="assistant",
                 content=response,
                 character=character_name,
@@ -343,6 +486,7 @@ class Orchestrator:
         self._last_ai_reply_time[group_id][responding_character] = now
 
         assigned_chars = list(self._assignments.values())
+        session = await self._get_group_session(group_id)
 
         for char_name in assigned_chars:
             if char_name == responding_character:
@@ -360,12 +504,11 @@ class Orchestrator:
 
             await asyncio.sleep(config.orchestrator.reply_delay_ms / 1000)
 
-            session = self._group_sessions[group_id][char_name]
             system_prompt = character_manager.get_system_prompt(char_name)
             if not system_prompt:
                 continue
 
-            context = session.get_context()
+            context = session.get_context_for_character(char_name, self._bot_qq_map)
             response = await llm_client.generate_roleplay_response(
                 character_prompt=system_prompt,
                 context=context,
@@ -376,7 +519,7 @@ class Orchestrator:
             if response:
                 self._chain_counters[group_id][char_name] += 1
 
-                session.add(ChatMessage(
+                await session.add(ChatMessage(
                     role="assistant",
                     content=response,
                     character=char_name,
@@ -413,12 +556,12 @@ class Orchestrator:
         if not char_port:
             return
 
-        session = self._group_sessions[group_id][initiating_char]
+        session = await self._get_group_session(group_id)
         system_prompt = character_manager.get_system_prompt(initiating_char)
         if not system_prompt:
             return
 
-        context = session.get_context()
+        context = session.get_context_for_character(initiating_char, self._bot_qq_map)
         initiation_prompt = f"请以{initiating_char}的身份，根据当前对话上下文，主动发起一个新的对话话题或回应之前的对话。保持角色性格特点，回复要自然、简洁。"
 
         response = await llm_client.generate_roleplay_response(
@@ -431,7 +574,7 @@ class Orchestrator:
         if response:
             self._last_initiation_time[group_id] = datetime.now()
 
-            session.add(ChatMessage(
+            await session.add(ChatMessage(
                 role="assistant",
                 content=response,
                 character=initiating_char,
@@ -502,8 +645,10 @@ class Orchestrator:
                 logger.error(f"Failed to send private reply: {e}")
 
     def get_session_messages(self, session_key: str, count: int = 20) -> list[ChatMessage]:
-        if session_key in self._sessions:
-            return self._sessions[session_key].get_context(count)
+        for sessions in (self._group_sessions, self._private_sessions):
+            session = sessions.get(session_key)
+            if session:
+                return session.get_context(count)
         return []
 
 
