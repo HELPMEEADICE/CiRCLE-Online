@@ -23,7 +23,9 @@ class LLMConfig(BaseSettings):
     api_key: str = ""
     base_url: str = "https://api.openai.com/v1"
     model: str = "gpt-4o-mini"
+    model_thinking: str = "default"
     assistant_model: str = ""
+    assistant_model_thinking: str = "default"
     temperature: float = 0.8
     max_tokens: int = 1024
 
@@ -142,7 +144,9 @@ def save_config(app_config: AppConfig):
     lines.append(f'api_key = "{app_config.llm.api_key}"')
     lines.append(f'base_url = "{app_config.llm.base_url}"')
     lines.append(f'model = "{app_config.llm.model}"')
+    lines.append(f'model_thinking = "{app_config.llm.model_thinking}"')
     lines.append(f'assistant_model = "{app_config.llm.assistant_model}"')
+    lines.append(f'assistant_model_thinking = "{app_config.llm.assistant_model_thinking}"')
     lines.append(f"temperature = {app_config.llm.temperature}")
     lines.append(f"max_tokens = {app_config.llm.max_tokens}")
     lines.append("")

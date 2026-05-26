@@ -32,6 +32,13 @@ class LLMClient:
     def is_available(self) -> bool:
         return self._client is not None
 
+    def _get_extra_body(self, thinking: str) -> Optional[dict]:
+        if thinking == "enabled":
+            return {"thinking": {"type": "enabled"}}
+        if thinking == "disabled":
+            return {"thinking": {"type": "disabled"}}
+        return None
+
     async def generate_response(
         self,
         system_prompt: str,
@@ -39,6 +46,7 @@ class LLMClient:
         temperature: float = None,
         max_tokens: int = None,
         model: str = None,
+        thinking: str = "default",
     ) -> Optional[str]:
         if not self._client:
             logger.error("LLM client not available")
@@ -52,12 +60,16 @@ class LLMClient:
             })
 
         try:
-            response = await self._client.chat.completions.create(
+            kwargs = dict(
                 model=model or config.llm.model,
                 messages=formatted_messages,
                 temperature=temperature or config.llm.temperature,
                 max_tokens=max_tokens or config.llm.max_tokens,
             )
+            extra_body = self._get_extra_body(thinking)
+            if extra_body:
+                kwargs["extra_body"] = extra_body
+            response = await self._client.chat.completions.create(**kwargs)
             content = response.choices[0].message.content
             logger.debug(f"LLM response: {content[:100]}...")
             return content
@@ -88,7 +100,7 @@ class LLMClient:
 回复要自然、简洁，符合群聊场景。不要暴露你是AI。
 {suffix}{time_note}"""
 
-        return await self.generate_response(system_prompt, messages)
+        return await self.generate_response(system_prompt, messages, thinking=config.llm.model_thinking)
 
     async def generate_assistant_response(
         self,
@@ -102,7 +114,8 @@ class LLMClient:
             logger.warning("Assistant model not configured, falling back to main model")
             assistant_model = config.llm.model
         return await self.generate_response(
-            system_prompt, messages, temperature, max_tokens, model=assistant_model
+            system_prompt, messages, temperature, max_tokens, model=assistant_model,
+            thinking=config.llm.assistant_model_thinking,
         )
 
     async def compress_context(
@@ -139,14 +152,19 @@ class LLMClient:
 请直接输出摘要内容，不要添加任何前缀或解释。"""
 
         compress_model = config.orchestrator.context_compression.model or config.llm.assistant_model or config.llm.model
+        compress_thinking = config.llm.assistant_model_thinking
 
         try:
-            response = await self._client.chat.completions.create(
+            kwargs = dict(
                 model=compress_model,
                 messages=[{"role": "user", "content": compression_prompt}],
                 temperature=0.3,
                 max_tokens=target_tokens,
             )
+            extra_body = self._get_extra_body(compress_thinking)
+            if extra_body:
+                kwargs["extra_body"] = extra_body
+            response = await self._client.chat.completions.create(**kwargs)
             summary = response.choices[0].message.content
             if not summary:
                 return None

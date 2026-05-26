@@ -292,9 +292,27 @@
                                     <input type="text" class="md3-input" id="cfg-model" placeholder="gpt-4o-mini">
                                 </div>
                                 <div class="md3-field">
+                                    <label class="md3-label">模型 Thinking</label>
+                                    <select class="md3-input md3-select" id="cfg-model_thinking">
+                                        <option value="default">默认</option>
+                                        <option value="enabled">启用</option>
+                                        <option value="disabled">关闭</option>
+                                    </select>
+                                    <span class="md3-helper">控制主模型的思考模式，默认不发送额外参数</span>
+                                </div>
+                                <div class="md3-field">
                                     <label class="md3-label">辅助模型 ID</label>
                                     <input type="text" class="md3-input" id="cfg-assistant_model" placeholder="可选，用于 AI 调度器、记忆归纳等辅助任务" autocomplete="off">
                                     <span class="md3-helper">用于 AI 调度器、记忆归纳整理、对话一致性等辅助任务的模型，留空则使用主模型</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">辅助模型 Thinking</label>
+                                    <select class="md3-input md3-select" id="cfg-assistant_model_thinking">
+                                        <option value="default">默认</option>
+                                        <option value="enabled">启用</option>
+                                        <option value="disabled">关闭</option>
+                                    </select>
+                                    <span class="md3-helper">控制辅助模型的思考模式，默认不发送额外参数</span>
                                 </div>
                                 <div class="md3-field">
                                     <label class="md3-label">温度 (Temperature)</label>

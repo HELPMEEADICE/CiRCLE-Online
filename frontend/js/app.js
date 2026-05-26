@@ -240,7 +240,9 @@ class CircleOnlineApp {
         this.setField('cfg-base_url', c.llm.base_url);
         this.setField('cfg-api_key', c.llm.api_key);
         this.setField('cfg-model', c.llm.model);
+        this.setField('cfg-model_thinking', c.llm.model_thinking);
         this.setField('cfg-assistant_model', c.llm.assistant_model);
+        this.setField('cfg-assistant_model_thinking', c.llm.assistant_model_thinking);
         this.setField('cfg-temperature', c.llm.temperature);
         this.setField('cfg-max_tokens', c.llm.max_tokens);
 
@@ -310,7 +312,9 @@ class CircleOnlineApp {
                 base_url: this.getField('cfg-base_url'),
                 api_key: this.getField('cfg-api_key'),
                 model: this.getField('cfg-model'),
+                model_thinking: this.getField('cfg-model_thinking'),
                 assistant_model: this.getField('cfg-assistant_model'),
+                assistant_model_thinking: this.getField('cfg-assistant_model_thinking'),
                 temperature: parseFloat(this.getField('cfg-temperature')) || null,
                 max_tokens: parseInt(this.getField('cfg-max_tokens')) || null,
             },
