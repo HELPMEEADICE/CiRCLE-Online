@@ -452,6 +452,7 @@ class Orchestrator:
 
     async def handle_group_message(self, port: int, data: dict):
         from backend.character_manager import character_manager
+        from backend.llm_client import llm_client
         if not self._enabled:
             return
 
