@@ -9,7 +9,33 @@
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
 </head>
 <body>
-    <div class="app-shell">
+    <div class="login-overlay" id="loginOverlay">
+        <div class="login-card">
+            <div class="login-header">
+                <span class="material-icons-round login-logo">hub</span>
+                <h1>CiRCLE Online</h1>
+                <p class="login-subtitle">Multi-Agent Orchestrator</p>
+            </div>
+            <form class="login-form" onsubmit="app.login(event)">
+                <div class="md3-field">
+                    <label class="md3-label">密码</label>
+                    <div class="md3-input-group">
+                        <input type="password" class="md3-input" id="loginPassword" placeholder="请输入管理密码" autocomplete="current-password">
+                        <button type="button" class="md3-icon-btn" onclick="app.togglePasswordVisibility('loginPassword')">
+                            <span class="material-icons-round">visibility</span>
+                        </button>
+                    </div>
+                </div>
+                <button type="submit" class="md3-btn md3-btn-filled login-btn">
+                    <span class="material-icons-round">login</span>
+                    登录
+                </button>
+                <p class="login-error" id="loginError"></p>
+            </form>
+        </div>
+    </div>
+
+    <div class="app-shell" id="appShell" style="display:none">
         <nav class="nav-rail">
             <div class="nav-header">
                 <span class="material-icons-round nav-logo">hub</span>
@@ -50,6 +76,9 @@
                             <span class="material-icons-round">check_circle</span>
                             <span>系统就绪</span>
                         </div>
+                        <button class="md3-icon-btn" onclick="app.logout()" title="退出登录">
+                            <span class="material-icons-round">logout</span>
+                        </button>
                     </div>
                 </div>
             </header>
@@ -480,7 +509,7 @@
                                 <span class="material-icons-round">admin_panel_settings</span>
                                 <div>
                                     <h3>管理员配置</h3>
-                                    <p class="settings-subtitle">设置管理员QQ号</p>
+                                    <p class="settings-subtitle">设置管理员QQ号和后台密码</p>
                                 </div>
                             </div>
                             <div class="settings-body">
@@ -488,6 +517,16 @@
                                     <label class="md3-label">管理员QQ号</label>
                                     <input type="text" class="md3-input" id="cfg-admin_qq" placeholder="请输入管理员QQ号">
                                     <span class="md3-helper">管理员可以使用特殊命令控制机器人</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">后台管理密码</label>
+                                    <div class="md3-input-group">
+                                        <input type="password" class="md3-input" id="cfg-dashboard_password" placeholder="留空则不修改" autocomplete="new-password">
+                                        <button type="button" class="md3-icon-btn" onclick="app.togglePasswordVisibility('cfg-dashboard_password')">
+                                            <span class="material-icons-round">visibility</span>
+                                        </button>
+                                    </div>
+                                    <span class="md3-helper">用于登录后台管理界面的密码</span>
                                 </div>
                                 <div class="settings-actions">
                                     <button class="md3-btn md3-btn-filled" onclick="app.saveChatConfig()">

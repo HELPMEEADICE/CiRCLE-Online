@@ -2,7 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from pydantic import BaseModel
-from fastapi import FastAPI, WebSocket, HTTPException
+from fastapi import FastAPI, WebSocket, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 from backend.config import config, load_config, save_config, load_port_assignments, save_port_assignments
@@ -14,6 +14,7 @@ from backend.character_manager import character_manager
 from backend.llm_client import llm_client
 from backend.utils import setup_logging, get_logger
 from backend.database import db
+from backend.auth import create_token, verify_token, revoke_token
 
 logger = get_logger("main")
 
@@ -73,6 +74,52 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="CiRCLE Online", version="1.0.0", lifespan=lifespan)
+
+PUBLIC_PATHS = {"/", "/api/auth/login", "/api/auth/check"}
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if path in PUBLIC_PATHS or path.startswith("/static"):
+        return await call_next(request)
+    if path.startswith("/ws/"):
+        return await call_next(request)
+    if path.startswith("/api/"):
+        token = None
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+        if not token:
+            token = request.query_params.get("access_token")
+        if not verify_token(token):
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+    return await call_next(request)
+
+
+@app.post("/api/auth/login")
+async def auth_login(request: Request):
+    body = await request.json()
+    password = body.get("password", "")
+    current = load_config()
+    token = create_token(password, current.chat.dashboard_password)
+    if not token:
+        raise HTTPException(401, "密码错误")
+    return {"success": True, "token": token}
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request):
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header[7:] if auth_header.startswith("Bearer ") else None
+    revoke_token(token)
+    return {"success": True}
+
+
+@app.get("/api/auth/check")
+async def auth_check(request: Request):
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header[7:] if auth_header.startswith("Bearer ") else None
+    return {"authenticated": verify_token(token)}
 
 if FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
@@ -266,6 +313,7 @@ async def get_config():
             "admin_qq": cfg.chat.admin_qq,
             "main_group_id": cfg.chat.main_group_id,
             "private_message_enabled": cfg.chat.private_message_enabled,
+            "dashboard_password_set": bool(cfg.chat.dashboard_password),
         },
         "logging": {
             "level": cfg.logging.level,
@@ -316,6 +364,7 @@ class ChatConfigUpdate(BaseModel):
     admin_qq: str = None
     main_group_id: str = None
     private_message_enabled: bool = None
+    dashboard_password: str = None
 
 
 class ConfigUpdate(BaseModel):
@@ -406,6 +455,9 @@ async def update_config(update: ConfigUpdate):
             current.chat.main_group_id = update.chat.main_group_id
         if update.chat.private_message_enabled is not None:
             current.chat.private_message_enabled = update.chat.private_message_enabled
+        if update.chat.dashboard_password is not None:
+            if update.chat.dashboard_password:
+                current.chat.dashboard_password = update.chat.dashboard_password
 
     save_config(current)
     # Update the global config object in-place so all modules see the changes
@@ -481,6 +533,7 @@ async def get_chat_config():
         "admin_qq": cfg.chat.admin_qq,
         "main_group_id": cfg.chat.main_group_id,
         "private_message_enabled": cfg.chat.private_message_enabled,
+        "dashboard_password_set": bool(cfg.chat.dashboard_password),
     }
 
 

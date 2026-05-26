@@ -18,10 +18,16 @@ class CircleOnlineApp {
         this.config = null;
         this.currentPage = 'dashboard';
         this.refreshInterval = null;
-        this.init();
+        this.token = localStorage.getItem('auth_token') || '';
     }
 
     async init() {
+        const valid = await this.checkAuth();
+        if (!valid) {
+            this.showLogin();
+            return;
+        }
+        this.showApp();
         this.bindEvents();
         this.initPasswordFields();
         await this.fetchStatus();
@@ -29,8 +35,97 @@ class CircleOnlineApp {
         this.showToast('系统已就绪', 'success');
     }
 
+    async checkAuth() {
+        if (!this.token) return false;
+        try {
+            const res = await fetch(`${API_BASE}/api/auth/check`, {
+                headers: { 'Authorization': `Bearer ${this.token}` },
+            });
+            if (!res.ok) return false;
+            const data = await res.json();
+            return data.authenticated === true;
+        } catch {
+            return false;
+        }
+    }
+
+    showLogin() {
+        document.getElementById('loginOverlay').style.display = 'flex';
+        document.getElementById('appShell').style.display = 'none';
+        document.getElementById('loginPassword').focus();
+    }
+
+    showApp() {
+        document.getElementById('loginOverlay').style.display = 'none';
+        document.getElementById('appShell').style.display = 'flex';
+    }
+
+    async login(event) {
+        event.preventDefault();
+        const password = document.getElementById('loginPassword').value;
+        const errorEl = document.getElementById('loginError');
+        errorEl.textContent = '';
+
+        try {
+            const res = await fetch(`${API_BASE}/api/auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password }),
+            });
+            if (!res.ok) {
+                const data = await res.json();
+                errorEl.textContent = data.detail || '密码错误';
+                return;
+            }
+            const data = await res.json();
+            this.token = data.token;
+            localStorage.setItem('auth_token', this.token);
+            document.getElementById('loginPassword').value = '';
+            this.showApp();
+            this.bindEvents();
+            this.initPasswordFields();
+            await this.fetchStatus();
+            this.startAutoRefresh();
+            this.showToast('登录成功', 'success');
+        } catch (e) {
+            errorEl.textContent = '连接失败: ' + e.message;
+        }
+    }
+
+    logout() {
+        fetch(`${API_BASE}/api/auth/logout`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${this.token}` },
+        }).catch(() => {});
+        this.token = '';
+        localStorage.removeItem('auth_token');
+        if (this.refreshInterval) {
+            clearInterval(this.refreshInterval);
+            this.refreshInterval = null;
+        }
+        this.showLogin();
+    }
+
+    authHeaders() {
+        return {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.token}`,
+        };
+    }
+
+    async authedFetch(url, options = {}) {
+        if (!options.headers) options.headers = {};
+        options.headers['Authorization'] = `Bearer ${this.token}`;
+        const res = await fetch(url, options);
+        if (res.status === 401) {
+            this.logout();
+            this.showToast('登录已过期，请重新登录', 'error');
+            throw new Error('Unauthorized');
+        }
+        return res;
+    }
+
     initPasswordFields() {
-        // Initialize API Key fields as hidden
         const apiKeyInputs = ['cfg-api_key', 'cfg-vision_api_key'];
         apiKeyInputs.forEach(id => {
             const input = document.getElementById(id);
@@ -50,12 +145,11 @@ class CircleOnlineApp {
         if (suffix) suffix.addEventListener('input', () => this.updatePreview());
         const timeAware = document.getElementById('cfg-time_awareness');
         if (timeAware) timeAware.addEventListener('change', () => this.updatePreview());
-        
-        // Auto dialogue toggle
+
         const autoDialogueEnabled = document.getElementById('cfg-auto_dialogue_enabled');
         if (autoDialogueEnabled) {
             autoDialogueEnabled.addEventListener('change', (e) => {
-                document.getElementById('autoDialogueToggleLabel').textContent = 
+                document.getElementById('autoDialogueToggleLabel').textContent =
                     e.target.checked ? '已启用' : '已禁用';
             });
         }
@@ -91,13 +185,15 @@ class CircleOnlineApp {
     // ── Status Fetch (Dashboard) ──
     async fetchStatus() {
         try {
-            const response = await fetch(`${API_BASE}/api/status`);
+            const response = await this.authedFetch(`${API_BASE}/api/status`);
             if (!response.ok) throw new Error('Failed to fetch status');
             const data = await response.json();
             this.updateState(data);
             this.render();
         } catch (error) {
-            console.error('Fetch status error:', error);
+            if (error.message !== 'Unauthorized') {
+                console.error('Fetch status error:', error);
+            }
         }
     }
 
@@ -202,8 +298,8 @@ class CircleOnlineApp {
                     </select>
                     <div class="md3-field">
                         <label class="md3-label">访问令牌</label>
-                        <input type="text" class="md3-input" id="cfg-token-${port}" 
-                               value="${currentToken}" 
+                        <input type="text" class="md3-input" id="cfg-token-${port}"
+                               value="${currentToken}"
                                placeholder="可选，留空表示不需要鉴权"
                                autocomplete="new-password"
                                onchange="app.updatePortToken(${port}, this.value)">
@@ -217,12 +313,14 @@ class CircleOnlineApp {
     // ── Config Load/Save ──
     async loadConfig() {
         try {
-            const response = await fetch(`${API_BASE}/api/config`);
+            const response = await this.authedFetch(`${API_BASE}/api/config`);
             if (!response.ok) throw new Error('Failed to fetch config');
             this.config = await response.json();
             this.populateConfigForms();
         } catch (error) {
-            this.showToast('加载配置失败: ' + error.message, 'error');
+            if (error.message !== 'Unauthorized') {
+                this.showToast('加载配置失败: ' + error.message, 'error');
+            }
         }
     }
 
@@ -250,7 +348,6 @@ class CircleOnlineApp {
         this.setField('cfg-temperature', c.llm.temperature);
         this.setField('cfg-max_tokens', c.llm.max_tokens);
 
-        // Vision model config
         if (c.llm.vision) {
             const visionEnabled = document.getElementById('cfg-vision_enabled');
             if (visionEnabled) {
@@ -267,12 +364,11 @@ class CircleOnlineApp {
         const timeAware = document.getElementById('cfg-time_awareness');
         if (timeAware) timeAware.checked = c.orchestrator.time_awareness;
 
-        // Auto dialogue config
         if (c.orchestrator.auto_dialogue) {
             const autoEnabled = document.getElementById('cfg-auto_dialogue_enabled');
             if (autoEnabled) {
                 autoEnabled.checked = c.orchestrator.auto_dialogue.enabled;
-                document.getElementById('autoDialogueToggleLabel').textContent = 
+                document.getElementById('autoDialogueToggleLabel').textContent =
                     c.orchestrator.auto_dialogue.enabled ? '已启用' : '已禁用';
             }
             this.setField('cfg-auto_dialogue_chain_length', c.orchestrator.auto_dialogue.chain_length);
@@ -282,7 +378,6 @@ class CircleOnlineApp {
             this.setField('cfg-auto_dialogue_initiation_interval_ms', c.orchestrator.auto_dialogue.initiation_interval_ms);
         }
 
-        // Chat config
         if (c.chat) {
             this.setField('cfg-admin_qq', c.chat.admin_qq);
             this.setField('cfg-main_group_id', c.chat.main_group_id);
@@ -390,9 +485,9 @@ class CircleOnlineApp {
                 },
             },
         };
-        
+
         try {
-            const response = await fetch(`${API_BASE}/api/orchestrator/auto-dialogue/config`, {
+            const response = await this.authedFetch(`${API_BASE}/api/orchestrator/auto-dialogue/config`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
@@ -400,25 +495,30 @@ class CircleOnlineApp {
             if (!response.ok) throw new Error('Save failed');
             const data = await response.json();
             this.showToast(data.message || '自动对话配置已保存', 'success');
-            
-            // Update toggle label
-            document.getElementById('autoDialogueToggleLabel').textContent = 
+
+            document.getElementById('autoDialogueToggleLabel').textContent =
                 autoEnabled ? '已启用' : '已禁用';
         } catch (error) {
-            this.showToast('保存失败: ' + error.message, 'error');
+            if (error.message !== 'Unauthorized') {
+                this.showToast('保存失败: ' + error.message, 'error');
+            }
         }
     }
 
     async saveChatConfig() {
         const privateMsgEnabled = document.getElementById('cfg-private_message_enabled')?.checked;
+        const dashboardPassword = this.getField('cfg-dashboard_password');
         const payload = {
             admin_qq: this.getField('cfg-admin_qq'),
             main_group_id: this.getField('cfg-main_group_id'),
             private_message_enabled: privateMsgEnabled,
         };
-        
+        if (dashboardPassword) {
+            payload.dashboard_password = dashboardPassword;
+        }
+
         try {
-            const response = await fetch(`${API_BASE}/api/chat/config`, {
+            const response = await this.authedFetch(`${API_BASE}/api/chat/config`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
@@ -426,14 +526,17 @@ class CircleOnlineApp {
             if (!response.ok) throw new Error('Save failed');
             const data = await response.json();
             this.showToast(data.message || '聊天配置已保存', 'success');
+            document.getElementById('cfg-dashboard_password').value = '';
         } catch (error) {
-            this.showToast('保存失败: ' + error.message, 'error');
+            if (error.message !== 'Unauthorized') {
+                this.showToast('保存失败: ' + error.message, 'error');
+            }
         }
     }
 
     async saveConfig(payload, successMessage) {
         try {
-            const response = await fetch(`${API_BASE}/api/config`, {
+            const response = await this.authedFetch(`${API_BASE}/api/config`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
@@ -442,7 +545,9 @@ class CircleOnlineApp {
             const data = await response.json();
             this.showToast(successMessage || data.message || '配置已保存', 'success');
         } catch (error) {
-            this.showToast('保存失败: ' + error.message, 'error');
+            if (error.message !== 'Unauthorized') {
+                this.showToast('保存失败: ' + error.message, 'error');
+            }
         }
     }
 
@@ -476,20 +581,22 @@ class CircleOnlineApp {
     // ── Actions ──
     async toggleOrchestrator() {
         try {
-            const response = await fetch(`${API_BASE}/api/orchestrator/toggle`, { method: 'POST' });
+            const response = await this.authedFetch(`${API_BASE}/api/orchestrator/toggle`, { method: 'POST' });
             if (!response.ok) throw new Error('Failed to toggle');
             const data = await response.json();
             this.state.enabled = data.enabled;
             this.renderToggle();
             this.showToast(data.enabled ? '编排器已启用' : '编排器已暂停', 'success');
         } catch (error) {
-            this.showToast('切换失败: ' + error.message, 'error');
+            if (error.message !== 'Unauthorized') {
+                this.showToast('切换失败: ' + error.message, 'error');
+            }
         }
     }
 
     async assignCharacter(port, characterName) {
         try {
-            const response = await fetch(`${API_BASE}/api/assign`, {
+            const response = await this.authedFetch(`${API_BASE}/api/assign`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ port, character_name: characterName }),
@@ -507,13 +614,15 @@ class CircleOnlineApp {
                 'success'
             );
         } catch (error) {
-            this.showToast('分配失败: ' + error.message, 'error');
+            if (error.message !== 'Unauthorized') {
+                this.showToast('分配失败: ' + error.message, 'error');
+            }
         }
     }
 
     async updatePortToken(port, token) {
         try {
-            const response = await fetch(`${API_BASE}/api/port-token`, {
+            const response = await this.authedFetch(`${API_BASE}/api/port-token`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ port, token }),
@@ -521,7 +630,9 @@ class CircleOnlineApp {
             if (!response.ok) throw new Error('Failed to update token');
             this.showToast(`端口 ${port} 的访问令牌已更新`, 'success');
         } catch (error) {
-            this.showToast('更新令牌失败: ' + error.message, 'error');
+            if (error.message !== 'Unauthorized') {
+                this.showToast('更新令牌失败: ' + error.message, 'error');
+            }
         }
     }
 
@@ -556,3 +667,4 @@ class CircleOnlineApp {
 }
 
 const app = new CircleOnlineApp();
+app.init();

@@ -52,6 +52,7 @@ class ChatConfig(BaseSettings):
     admin_qq: str = ""
     main_group_id: str = ""
     private_message_enabled: bool = False
+    dashboard_password: str = "admin123"
 
 
 class ContextCompressionConfig(BaseSettings):
@@ -210,6 +211,7 @@ def save_config(app_config: AppConfig):
     lines.append(f'admin_qq = "{app_config.chat.admin_qq}"')
     lines.append(f'main_group_id = "{app_config.chat.main_group_id}"')
     lines.append(f"private_message_enabled = {'true' if app_config.chat.private_message_enabled else 'false'}")
+    lines.append(f'dashboard_password = "{app_config.chat.dashboard_password}"')
     lines.append("")
 
     lines.append("[logging]")

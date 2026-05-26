@@ -1109,6 +1109,71 @@ input:checked + .slider:before {
     to { transform: translateX(100%); opacity: 0; }
 }
 
+/* ── Login Overlay ── */
+.login-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--md-sys-color-background);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+}
+
+.login-card {
+    background: var(--md-sys-color-surface-1);
+    border-radius: var(--md-sys-shape-corner-extra-large);
+    padding: 40px;
+    box-shadow: var(--md-sys-elevation-3);
+    width: 100%;
+    max-width: 380px;
+    text-align: center;
+}
+
+.login-header {
+    margin-bottom: 32px;
+}
+
+.login-logo {
+    font-size: 48px;
+    color: var(--md-sys-color-primary);
+    margin-bottom: 12px;
+}
+
+.login-header h1 {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--md-sys-color-on-surface);
+    margin-bottom: 4px;
+}
+
+.login-subtitle {
+    font-size: 14px;
+    color: var(--md-sys-color-on-surface-variant);
+}
+
+.login-form {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.login-btn {
+    width: 100%;
+    justify-content: center;
+    padding: 12px 24px;
+}
+
+.login-error {
+    font-size: 13px;
+    color: var(--md-sys-color-error);
+    min-height: 20px;
+    margin: 0;
+}
+
 /* ── Responsive ── */
 @media (max-width: 768px) {
     .nav-rail {
