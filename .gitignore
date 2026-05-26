@@ -1,0 +1,7 @@
+docs/
+.pytest_cache/
+__pycache__/
+config/
+logs/
+characters/
+.env

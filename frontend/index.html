@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CiRCLE Online - Multi-Agent Orchestrator</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+</head>
+<body>
+    <div class="app-shell">
+        <nav class="nav-rail">
+            <div class="nav-header">
+                <span class="material-icons-round nav-logo">hub</span>
+                <span class="nav-title">CiRCLE</span>
+            </div>
+            <div class="nav-items">
+                <button class="nav-item active" data-page="dashboard" onclick="app.navigateTo('dashboard')">
+                    <span class="nav-icon material-icons-round">dashboard</span>
+                    <span class="nav-label">仪表盘</span>
+                </button>
+                <button class="nav-item" data-page="server" onclick="app.navigateTo('server')">
+                    <span class="nav-icon material-icons-round">dns</span>
+                    <span class="nav-label">本地参数</span>
+                </button>
+                <button class="nav-item" data-page="llm" onclick="app.navigateTo('llm')">
+                    <span class="nav-icon material-icons-round">psychology</span>
+                    <span class="nav-label">LLM 配置</span>
+                </button>
+            </div>
+            <div class="nav-footer">
+                <div class="nav-status" id="globalStatus">
+                    <span class="status-dot"></span>
+                    <span class="nav-status-text">就绪</span>
+                </div>
+            </div>
+        </nav>
+
+        <div class="app-main">
+            <header class="app-header">
+                <div class="header-content">
+                    <h1 id="pageTitle">仪表盘</h1>
+                    <div class="header-actions">
+                        <div class="status-chip" id="headerStatus">
+                            <span class="material-icons-round">check_circle</span>
+                            <span>系统就绪</span>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <main class="main-content" id="mainContent">
+                <!-- Dashboard Page -->
+                <div class="page active" id="page-dashboard">
+                    <section class="control-section">
+                        <div class="master-control">
+                            <div class="control-card">
+                                <div class="control-header">
+                                    <span class="material-icons-round">smart_toy</span>
+                                    <h2>AI 编排器控制</h2>
+                                </div>
+                                <div class="control-body">
+                                    <div class="toggle-container">
+                                        <label class="md3-switch">
+                                            <input type="checkbox" id="orchestratorToggle" checked>
+                                            <span class="slider"></span>
+                                        </label>
+                                        <span class="toggle-label" id="toggleLabel">运行中</span>
+                                    </div>
+                                    <div class="control-stats">
+                                        <div class="stat-item">
+                                            <span class="stat-value" id="connectedCount">0</span>
+                                            <span class="stat-label">已连接</span>
+                                        </div>
+                                        <div class="stat-item">
+                                            <span class="stat-value" id="assignedCount">0</span>
+                                            <span class="stat-label">已分配</span>
+                                        </div>
+                                        <div class="stat-item">
+                                            <span class="stat-value" id="characterCount">0</span>
+                                            <span class="stat-label">角色数</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="ports-section">
+                        <h2 class="section-title">
+                            <span class="material-icons-round">dns</span>
+                            端口监控
+                        </h2>
+                        <div class="ports-grid" id="portsGrid"></div>
+                    </section>
+
+                    <section class="characters-section">
+                        <h2 class="section-title">
+                            <span class="material-icons-round">people</span>
+                            角色分配
+                        </h2>
+                        <div class="assignment-matrix" id="assignmentMatrix"></div>
+                    </section>
+
+                    <section class="messages-section">
+                        <h2 class="section-title">
+                            <span class="material-icons-round">chat</span>
+                            最近消息
+                        </h2>
+                        <div class="messages-container" id="messagesContainer">
+                            <div class="empty-state">
+                                <span class="material-icons-round">forum</span>
+                                <p>暂无消息记录</p>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+
+                <!-- Server Config Page -->
+                <div class="page" id="page-server">
+                    <div class="settings-page">
+                        <div class="settings-card">
+                            <div class="settings-card-header">
+                                <span class="material-icons-round">settings_ethernet</span>
+                                <div>
+                                    <h3>服务器配置</h3>
+                                    <p class="settings-subtitle">修改后需重启服务生效</p>
+                                </div>
+                            </div>
+                            <div class="settings-body">
+                                <div class="md3-field">
+                                    <label class="md3-label">监听地址</label>
+                                    <input type="text" class="md3-input" id="cfg-host" placeholder="0.0.0.0">
+                                    <span class="md3-helper">服务器绑定的 IP 地址，0.0.0.0 表示所有接口</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">管理端口</label>
+                                    <input type="number" class="md3-input" id="cfg-management_port" placeholder="8080">
+                                    <span class="md3-helper">Web 管理界面和 API 的端口</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">起始端口</label>
+                                    <input type="number" class="md3-input" id="cfg-base_port" placeholder="8081">
+                                    <span class="md3-helper">WebSocket 端口范围的起始值</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">端口数量</label>
+                                    <input type="number" class="md3-input" id="cfg-num_ports" placeholder="5" min="1" max="20">
+                                    <span class="md3-helper">可用的 WebSocket 端口数量</span>
+                                </div>
+                                <div class="settings-actions">
+                                    <button class="md3-btn md3-btn-filled" onclick="app.saveServerConfig()">
+                                        <span class="material-icons-round">save</span>
+                                        保存配置
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="settings-card">
+                            <div class="settings-card-header">
+                                <span class="material-icons-round">tune</span>
+                                <div>
+                                    <h3>编排器参数</h3>
+                                    <p class="settings-subtitle">消息处理与回复行为</p>
+                                </div>
+                            </div>
+                            <div class="settings-body">
+                                <div class="md3-field">
+                                    <label class="md3-label">回复延迟 (ms)</label>
+                                    <input type="number" class="md3-input" id="cfg-reply_delay_ms" placeholder="1000" min="0">
+                                    <span class="md3-helper">收到消息后延迟多久回复，单位毫秒</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">上下文消息数</label>
+                                    <input type="number" class="md3-input" id="cfg-max_context_messages" placeholder="20" min="1" max="100">
+                                    <span class="md3-helper">发送给 LLM 的最近消息数量</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">随机回复概率</label>
+                                    <input type="number" class="md3-input" id="cfg-group_reply_probability" placeholder="0.3" min="0" max="1" step="0.05">
+                                    <span class="md3-helper">未被 @ 时随机回复的概率，0~1</span>
+                                </div>
+                                <div class="settings-actions">
+                                    <button class="md3-btn md3-btn-filled" onclick="app.saveOrchestratorConfig()">
+                                        <span class="material-icons-round">save</span>
+                                        保存配置
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="settings-card">
+                            <div class="settings-card-header">
+                                <span class="material-icons-round">auto_awesome</span>
+                                <div>
+                                    <h3>自动对话配置</h3>
+                                    <p class="settings-subtitle">AI 之间的自动对话行为</p>
+                                </div>
+                            </div>
+                            <div class="settings-body">
+                                <div class="md3-field">
+                                    <label class="md3-label">启用自动对话</label>
+                                    <div class="toggle-container">
+                                        <label class="md3-switch">
+                                            <input type="checkbox" id="cfg-auto_dialogue_enabled">
+                                            <span class="slider"></span>
+                                        </label>
+                                        <span class="toggle-label" id="autoDialogueToggleLabel">已禁用</span>
+                                    </div>
+                                    <span class="md3-helper">启用后 AI 角色之间可以自动对话</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">对话链长度</label>
+                                    <input type="number" class="md3-input" id="cfg-auto_dialogue_chain_length" placeholder="5" min="1" max="20">
+                                    <span class="md3-helper">AI 之间最多连续对话轮数，防止无限循环</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">对话冷却时间 (ms)</label>
+                                    <input type="number" class="md3-input" id="cfg-auto_dialogue_cooldown_ms" placeholder="30000" min="0">
+                                    <span class="md3-helper">同一角色两次回复之间的最小间隔，单位毫秒</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">触发概率</label>
+                                    <input type="number" class="md3-input" id="cfg-auto_dialogue_trigger_probability" placeholder="0.5" min="0" max="1" step="0.05">
+                                    <span class="md3-helper">当一个 AI 回复后，触发其他 AI 回复的概率，0~1</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">主动对话概率</label>
+                                    <input type="number" class="md3-input" id="cfg-auto_dialogue_initiation_probability" placeholder="0.3" min="0" max="1" step="0.05">
+                                    <span class="md3-helper">AI 主动发起对话的概率，0~1</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">主动对话间隔 (ms)</label>
+                                    <input type="number" class="md3-input" id="cfg-auto_dialogue_initiation_interval_ms" placeholder="600000" min="0">
+                                    <span class="md3-helper">AI 主动发起对话的最小间隔，单位毫秒（默认10分钟）</span>
+                                </div>
+                                <div class="settings-actions">
+                                    <button class="md3-btn md3-btn-filled" onclick="app.saveAutoDialogueConfig()">
+                                        <span class="material-icons-round">save</span>
+                                        保存配置
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- LLM Config Page -->
+                <div class="page" id="page-llm">
+                    <div class="settings-page">
+                        <div class="settings-card">
+                            <div class="settings-card-header">
+                                <span class="material-icons-round">cloud</span>
+                                <div>
+                                    <h3>LLM 接口配置</h3>
+                                    <p class="settings-subtitle">API 连接与模型参数</p>
+                                </div>
+                            </div>
+                            <div class="settings-body">
+                                <div class="md3-field">
+                                    <label class="md3-label">提供商</label>
+                                    <select class="md3-input md3-select" id="cfg-provider">
+                                        <option value="openai">OpenAI</option>
+                                        <option value="deepseek">DeepSeek</option>
+                                        <option value="custom">自定义</option>
+                                    </select>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">API 地址</label>
+                                    <input type="url" class="md3-input" id="cfg-base_url" placeholder="https://api.openai.com/v1">
+                                    <span class="md3-helper">OpenAI 兼容接口的基础 URL</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">API Key</label>
+                                    <div class="md3-input-group">
+                                        <input type="text" class="md3-input" id="cfg-api_key" placeholder="sk-..." autocomplete="new-password">
+                                        <button class="md3-icon-btn" onclick="app.togglePasswordVisibility('cfg-api_key')">
+                                            <span class="material-icons-round">visibility</span>
+                                        </button>
+                                    </div>
+                                    <span class="md3-helper">请勿泄露你的 API Key</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">模型名称</label>
+                                    <input type="text" class="md3-input" id="cfg-model" placeholder="gpt-4o-mini">
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">辅助模型 ID</label>
+                                    <input type="text" class="md3-input" id="cfg-assistant_model" placeholder="可选，用于 AI 调度器、记忆归纳等辅助任务" autocomplete="off">
+                                    <span class="md3-helper">用于 AI 调度器、记忆归纳整理、对话一致性等辅助任务的模型，留空则使用主模型</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">温度 (Temperature)</label>
+                                    <input type="number" class="md3-input" id="cfg-temperature" placeholder="0.8" min="0" max="2" step="0.1">
+                                    <span class="md3-helper">越高越有创意，越低越稳定，范围 0~2</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">最大 Token 数</label>
+                                    <input type="number" class="md3-input" id="cfg-max_tokens" placeholder="1024" min="1" max="128000">
+                                    <span class="md3-helper">单次回复的最大长度</span>
+                                </div>
+                                <div class="settings-actions">
+                                    <button class="md3-btn md3-btn-filled" onclick="app.saveLLMConfig()">
+                                        <span class="material-icons-round">save</span>
+                                        保存配置
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="settings-card">
+                            <div class="settings-card-header">
+                                <span class="material-icons-round">auto_fix_high</span>
+                                <div>
+                                    <h3>提示词工程</h3>
+                                    <p class="settings-subtitle">注入额外上下文到系统提示词</p>
+                                </div>
+                            </div>
+                            <div class="settings-body">
+                                <div class="md3-field">
+                                    <label class="md3-label">提示词前置注入</label>
+                                    <textarea class="md3-textarea" id="cfg-prompt_prefix" rows="4" placeholder="插入到系统提示词最前面的内容..."></textarea>
+                                    <span class="md3-helper">会添加在角色设定和固定提示词之前</span>
+                                </div>
+                                <div class="prompt-preview">
+                                    <div class="preview-header" onclick="app.togglePreview()">
+                                        <span class="material-icons-round">preview</span>
+                                        <span>提示词结构预览</span>
+                                        <span class="material-icons-round preview-arrow" id="previewArrow">expand_more</span>
+                                    </div>
+                                    <div class="preview-body" id="promptPreviewBody" style="display:none">
+                                        <div class="preview-block prefix-block">
+                                            <span class="preview-tag">前置注入</span>
+                                            <pre id="previewPrefix">(空)</pre>
+                                        </div>
+                                        <div class="preview-block soul-block">
+                                            <span class="preview-tag">角色设定</span>
+                                            <pre>[角色的 soul.md 内容]</pre>
+                                        </div>
+                                        <div class="preview-block fixed-block">
+                                            <span class="preview-tag">固定提示词</span>
+                                            <pre>请以角色的身份回复。保持角色的性格特点和说话风格。
+回复要自然、简洁，符合群聊场景。不要暴露你是AI。</pre>
+                                        </div>
+                                        <div class="preview-block suffix-block">
+                                            <span class="preview-tag">后置注入</span>
+                                            <pre id="previewSuffix">(空)</pre>
+                                        </div>
+                                        <div class="preview-block time-block" id="previewTimeBlock" style="display:none">
+                                            <span class="preview-tag">时间感知</span>
+                                            <pre>当前时间：2026-05-26 12:00:00</pre>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">提示词后置注入</label>
+                                    <textarea class="md3-textarea" id="cfg-prompt_suffix" rows="4" placeholder="插入到系统提示词最后面的内容..."></textarea>
+                                    <span class="md3-helper">会添加在固定提示词之后、时间感知之前</span>
+                                </div>
+                                <div class="md3-field">
+                                    <div class="md3-switch-row">
+                                        <div>
+                                            <label class="md3-label">时间感知</label>
+                                            <span class="md3-helper" style="margin-top:4px">启用后会在上下文末尾附加当前时间</span>
+                                        </div>
+                                        <label class="md3-switch">
+                                            <input type="checkbox" id="cfg-time_awareness">
+                                            <span class="slider"></span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="settings-actions">
+                                    <button class="md3-btn md3-btn-filled" onclick="app.savePromptConfig()">
+                                        <span class="material-icons-round">save</span>
+                                        保存提示词配置
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+
+            <footer class="app-footer">
+                <p>CiRCLE Online &copy; 2026 | Multi-Agent QQ Group Orchestrator</p>
+            </footer>
+        </div>
+    </div>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
