@@ -15,6 +15,7 @@ from backend.llm_client import init_llm_client
 from backend.utils import setup_logging, get_logger
 from backend.database import init_db
 from backend.auth import create_token, verify_token, revoke_token
+from fastapi.middleware.cors import CORSMiddleware
 
 logger = get_logger("main")
 
@@ -85,6 +86,19 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="CiRCLE Online", version="1.0.0", lifespan=lifespan)
+
+# CORS middleware - restrict to localhost and LAN for dashboard security
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        f"http://localhost:{config.server.management_port}",
+        f"http://127.0.0.1:{config.server.management_port}",
+    ],
+    allow_origin_regex=r"https?://192\.168\.\d{1,3}\.\d{1,3}(:\d+)?",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 PUBLIC_PATHS = {"/", "/api/auth/login", "/api/auth/check"}
 

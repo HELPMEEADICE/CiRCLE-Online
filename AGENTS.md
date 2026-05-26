@@ -38,7 +38,7 @@ run.py → backend/main.py:app (FastAPI, uvicorn)
 ## Key Gotchas
 
 - **Port range**: 5 ports starting at 8081 (configurable). Management API on 8080. Port assignment persisted to `config/ports.toml` at runtime.
-- **No auth**: All API endpoints are unprotected. No CORS config.
+- **Auth**: API endpoints require token via `Authorization: Bearer <token>` header or `access_token` query param. CORS configured for localhost and 192.168.*.* LAN.
 - **Global singletons**: `config`, `orchestrator`, `character_manager`, `llm_client` are module-level singletons. Import side effects are real.
 - **Character reload**: Call `POST /api/reload-characters` to reload from disk without restart. Config changes require restart.
 - **Test expectations**: `test_character_manager` asserts exactly 5 characters exist. Adding/removing character dirs will break it.
