@@ -64,4 +64,19 @@ class CharacterManager:
         self._load_characters()
 
 
-character_manager = CharacterManager()
+_character_manager = None
+
+
+def init_character_manager():
+    global _character_manager
+    if _character_manager is None:
+        _character_manager = CharacterManager()
+    return _character_manager
+
+
+def __getattr__(name):
+    if name == "character_manager":
+        if _character_manager is None:
+            return init_character_manager()
+        return _character_manager
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

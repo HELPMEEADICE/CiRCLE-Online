@@ -6,8 +6,6 @@ from datetime import datetime
 from pathlib import Path
 from backend.models import ChatMessage, CharacterAssignment
 from backend.config import config, load_port_assignments, save_port_assignments
-from backend.llm_client import llm_client
-from backend.character_manager import character_manager
 from backend.token_counter import count_message_tokens, count_single_message_tokens, truncate_messages_to_token_budget
 from backend.utils import get_logger, parse_message_text, build_text_message, extract_image_urls
 from backend.database import db
@@ -47,7 +45,7 @@ class SessionMemory:
         self.max_messages = max_messages
         self.max_tokens = max_tokens
         self._total_tokens: int = 0
-        self._compressing: bool = False
+        self._compress_lock: asyncio.Lock = asyncio.Lock()
 
     async def init_from_db(self):
         rows = await db.load_messages(self.session_key)
@@ -94,8 +92,7 @@ class SessionMemory:
             self._total_tokens = count_message_tokens(self.messages)
             await db.delete_messages_by_ids(removed_ids)
 
-        if self._total_tokens > self.max_tokens and not self._compressing:
-            self._compressing = True
+        if self._total_tokens > self.max_tokens and not self._compress_lock.locked():
             try:
                 loop = asyncio.get_running_loop()
                 loop.create_task(self._compress())
@@ -103,47 +100,46 @@ class SessionMemory:
                 await self._truncate_async()
 
     async def _compress(self):
-        compression_cfg = config.orchestrator.context_compression
-        reserve = compression_cfg.reserve_recent
+        from backend.llm_client import llm_client
+        async with self._compress_lock:
+            compression_cfg = config.orchestrator.context_compression
+            reserve = compression_cfg.reserve_recent
 
-        if len(self.messages) <= reserve:
-            self._compressing = False
-            return
+            if len(self.messages) <= reserve:
+                return
 
-        old_messages = self.messages[:-reserve]
-        recent_messages = self.messages[-reserve:]
-        old_db_ids = self._db_ids[:-reserve]
-        recent_db_ids = self._db_ids[-reserve:]
+            old_messages = self.messages[:-reserve]
+            recent_messages = self.messages[-reserve:]
+            old_db_ids = self._db_ids[:-reserve]
+            recent_db_ids = self._db_ids[-reserve:]
 
-        character_name = ""
-        for msg in reversed(self.messages):
-            if msg.character:
-                character_name = msg.character
-                break
+            character_name = ""
+            for msg in reversed(self.messages):
+                if msg.character:
+                    character_name = msg.character
+                    break
 
-        summary_msg = await llm_client.compress_context(
-            messages=old_messages,
-            character_name=character_name,
-            target_tokens=compression_cfg.target_tokens,
-        )
-
-        if summary_msg:
-            marker_id = max(old_db_ids) if old_db_ids else 0
-            await db.save_compression_marker(self.session_key, marker_id)
-
-            self._save_context_compression_file(summary_msg.content)
-
-            self.messages = recent_messages
-            self._db_ids = recent_db_ids
-            self._total_tokens = count_message_tokens(self.messages)
-            logger.info(
-                f"Context compressed: {len(old_messages)} msgs archived (marker={marker_id}), "
-                f"kept {len(recent_messages)} recent msgs, total tokens now {self._total_tokens}"
+            summary_msg = await llm_client.compress_context(
+                messages=old_messages,
+                character_name=character_name,
+                target_tokens=compression_cfg.target_tokens,
             )
-        else:
-            await self._truncate_async()
 
-        self._compressing = False
+            if summary_msg:
+                marker_id = max(old_db_ids) if old_db_ids else 0
+                await db.save_compression_marker(self.session_key, marker_id)
+
+                self._save_context_compression_file(summary_msg.content)
+
+                self.messages = recent_messages
+                self._db_ids = recent_db_ids
+                self._total_tokens = count_message_tokens(self.messages)
+                logger.info(
+                    f"Context compressed: {len(old_messages)} msgs archived (marker={marker_id}), "
+                    f"kept {len(recent_messages)} recent msgs, total tokens now {self._total_tokens}"
+                )
+            else:
+                await self._truncate_async()
 
     def _save_context_compression_file(self, summary: str):
         CONTEXT_COMPRESSION_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -394,6 +390,8 @@ class Orchestrator:
         return self._private_sessions[session_key]
 
     async def handle_group_message(self, port: int, data: dict):
+        from backend.llm_client import llm_client
+        from backend.character_manager import character_manager
         if not self._enabled:
             return
 
@@ -487,6 +485,8 @@ class Orchestrator:
                 await self.handle_ai_reply(port, group_id, character_name, response, depth=0)
 
     async def handle_private_message(self, port: int, data: dict):
+        from backend.llm_client import llm_client
+        from backend.character_manager import character_manager
         if not self._enabled:
             return
 
@@ -573,6 +573,8 @@ class Orchestrator:
 
     async def handle_ai_reply(self, port: int, group_id: str, responding_character: str,
                               reply_text: str, depth: int = 0):
+        from backend.llm_client import llm_client
+        from backend.character_manager import character_manager
         if not config.orchestrator.auto_dialogue.enabled:
             return
 
@@ -650,6 +652,8 @@ class Orchestrator:
         return random.random() < auto_config.initiation_probability
 
     async def _initiate_auto_dialogue(self, group_id: str):
+        from backend.llm_client import llm_client
+        from backend.character_manager import character_manager
         if not self._should_initiate_dialogue(group_id):
             return
 
@@ -763,4 +767,19 @@ class Orchestrator:
         return []
 
 
-orchestrator = Orchestrator()
+_orchestrator = None
+
+
+def init_orchestrator():
+    global _orchestrator
+    if _orchestrator is None:
+        _orchestrator = Orchestrator()
+    return _orchestrator
+
+
+def __getattr__(name):
+    if name == "orchestrator":
+        if _orchestrator is None:
+            return init_orchestrator()
+        return _orchestrator
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -5,15 +5,15 @@ from pydantic import BaseModel
 from fastapi import FastAPI, WebSocket, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
-from backend.config import config, load_config, save_config, load_port_assignments, save_port_assignments
+from backend.config import config, load_config, save_config, load_port_assignments, save_port_assignments, init_config
 from backend.models import CharacterAssignment, OrchestratorState
 from backend.websocket_server import MultiPortWebSocketServer
 from backend.napcat_handler import NapCatMessageHandler
-from backend.orchestrator import orchestrator
-from backend.character_manager import character_manager
-from backend.llm_client import llm_client
+from backend.orchestrator import init_orchestrator
+from backend.character_manager import init_character_manager
+from backend.llm_client import init_llm_client
 from backend.utils import setup_logging, get_logger
-from backend.database import db
+from backend.database import init_db
 from backend.auth import create_token, verify_token, revoke_token
 
 logger = get_logger("main")
@@ -22,6 +22,9 @@ FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 
 ws_server: MultiPortWebSocketServer = None
 msg_handler: NapCatMessageHandler = None
+orchestrator = None
+character_manager = None
+llm_client = None
 
 
 async def on_ws_status_change(event: str, port: int, qq_id: str = None):
@@ -36,7 +39,14 @@ async def on_ws_status_change(event: str, port: int, qq_id: str = None):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global ws_server, msg_handler
+    global ws_server, msg_handler, orchestrator, character_manager, llm_client
+
+    # Initialize singletons in dependency order
+    init_config()
+    init_db()
+    character_manager = init_character_manager()
+    llm_client = init_llm_client()
+    orchestrator = init_orchestrator()
 
     setup_logging(config.logging.level)
 
@@ -45,7 +55,7 @@ async def lifespan(app: FastAPI):
 
     # Load port configurations
     port_configs = load_port_assignments()
-    
+
     ws_server = MultiPortWebSocketServer(config.server.base_port, config.server.num_ports, config.server.host)
     msg_handler = NapCatMessageHandler()
 
@@ -70,6 +80,7 @@ async def lifespan(app: FastAPI):
 
     logger.info("Shutting down...")
     await ws_server.stop_servers()
+    from backend.database import db
     await db.close()
 
 
@@ -377,7 +388,6 @@ class ConfigUpdate(BaseModel):
 
 @app.post("/api/config")
 async def update_config(update: ConfigUpdate):
-    global config
     current = load_config()
 
     if update.server:
@@ -460,8 +470,15 @@ async def update_config(update: ConfigUpdate):
                 current.chat.dashboard_password = update.chat.dashboard_password
 
     save_config(current)
-    # Update the global config object in-place so all modules see the changes
-    config.__dict__.update(current.__dict__)
+    # Update each sub-config in-place so all cached references stay valid
+    config.server.__dict__.update(current.server.__dict__)
+    config.llm.__dict__.update(current.llm.__dict__)
+    config.llm.vision.__dict__.update(current.llm.vision.__dict__)
+    config.orchestrator.__dict__.update(current.orchestrator.__dict__)
+    config.orchestrator.auto_dialogue.__dict__.update(current.orchestrator.auto_dialogue.__dict__)
+    config.orchestrator.context_compression.__dict__.update(current.orchestrator.context_compression.__dict__)
+    config.chat.__dict__.update(current.chat.__dict__)
+    config.logging.__dict__.update(current.logging.__dict__)
 
     # Reinitialize LLM client if API key or base URL changed
     if llm_changed:
@@ -494,7 +511,6 @@ async def get_auto_dialogue_config():
 
 @app.post("/api/orchestrator/auto-dialogue/config")
 async def update_auto_dialogue_config(update: AutoDialogueConfigUpdate):
-    global config
     current = load_config()
 
     if update.enabled is not None:
@@ -511,18 +527,24 @@ async def update_auto_dialogue_config(update: AutoDialogueConfigUpdate):
         current.orchestrator.auto_dialogue.initiation_interval_ms = update.initiation_interval_ms
 
     save_config(current)
-    config.__dict__.update(current.__dict__)
+    config.server.__dict__.update(current.server.__dict__)
+    config.llm.__dict__.update(current.llm.__dict__)
+    config.llm.vision.__dict__.update(current.llm.vision.__dict__)
+    config.orchestrator.__dict__.update(current.orchestrator.__dict__)
+    config.orchestrator.auto_dialogue.__dict__.update(current.orchestrator.auto_dialogue.__dict__)
+    config.orchestrator.context_compression.__dict__.update(current.orchestrator.context_compression.__dict__)
+    config.chat.__dict__.update(current.chat.__dict__)
+    config.logging.__dict__.update(current.logging.__dict__)
 
     return {"success": True, "message": "自动对话配置已保存"}
 
 
 @app.post("/api/orchestrator/auto-dialogue/toggle")
 async def toggle_auto_dialogue():
-    global config
     current = load_config()
     current.orchestrator.auto_dialogue.enabled = not current.orchestrator.auto_dialogue.enabled
     save_config(current)
-    config.__dict__.update(current.__dict__)
+    config.orchestrator.auto_dialogue.__dict__.update(current.orchestrator.auto_dialogue.__dict__)
     return {"enabled": config.orchestrator.auto_dialogue.enabled}
 
 
@@ -539,7 +561,6 @@ async def get_chat_config():
 
 @app.post("/api/chat/config")
 async def update_chat_config(update: ChatConfigUpdate):
-    global config
     current = load_config()
 
     if update.admin_qq is not None:
@@ -548,9 +569,21 @@ async def update_chat_config(update: ChatConfigUpdate):
         current.chat.main_group_id = update.main_group_id
     if update.private_message_enabled is not None:
         current.chat.private_message_enabled = update.private_message_enabled
+    if update.dashboard_password is not None:
+        if update.dashboard_password:
+            current.chat.dashboard_password = update.dashboard_password
 
     save_config(current)
-    config.__dict__.update(current.__dict__)
+    config.server.__dict__.update(current.server.__dict__)
+    config.llm.__dict__.update(current.llm.__dict__)
+    config.llm.vision.__dict__.update(current.llm.vision.__dict__)
+    config.orchestrator.__dict__.update(current.orchestrator.__dict__)
+    config.orchestrator.auto_dialogue.__dict__.update(current.orchestrator.auto_dialogue.__dict__)
+    config.orchestrator.context_compression.__dict__.update(current.orchestrator.context_compression.__dict__)
+    config.chat.__dict__.update(current.chat.__dict__)
+    config.logging.__dict__.update(current.logging.__dict__)
+
+    return {"success": True, "message": "聊天配置已保存"}
 
     return {"success": True, "message": "聊天配置已保存"}
 

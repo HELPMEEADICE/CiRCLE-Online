@@ -221,4 +221,17 @@ def save_config(app_config: AppConfig):
     settings_path.write_text("\n".join(lines), encoding="utf-8")
 
 
-config = load_config()
+config = AppConfig()
+
+
+def init_config():
+    loaded = load_config()
+    config.server.__dict__.update(loaded.server.__dict__)
+    config.llm.__dict__.update(loaded.llm.__dict__)
+    config.llm.vision.__dict__.update(loaded.llm.vision.__dict__)
+    config.orchestrator.__dict__.update(loaded.orchestrator.__dict__)
+    config.orchestrator.auto_dialogue.__dict__.update(loaded.orchestrator.auto_dialogue.__dict__)
+    config.orchestrator.context_compression.__dict__.update(loaded.orchestrator.context_compression.__dict__)
+    config.chat.__dict__.update(loaded.chat.__dict__)
+    config.logging.__dict__.update(loaded.logging.__dict__)
+    return config

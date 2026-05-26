@@ -264,4 +264,19 @@ class LLMClient:
             return None
 
 
-llm_client = LLMClient()
+_llm_client = None
+
+
+def init_llm_client():
+    global _llm_client
+    if _llm_client is None:
+        _llm_client = LLMClient()
+    return _llm_client
+
+
+def __getattr__(name):
+    if name == "llm_client":
+        if _llm_client is None:
+            return init_llm_client()
+        return _llm_client
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

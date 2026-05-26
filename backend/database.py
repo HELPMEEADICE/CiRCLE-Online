@@ -171,4 +171,19 @@ class ChatDatabase:
         return row[0] if row else None
 
 
-db = ChatDatabase()
+_db = None
+
+
+def init_db():
+    global _db
+    if _db is None:
+        _db = ChatDatabase()
+    return _db
+
+
+def __getattr__(name):
+    if name == "db":
+        if _db is None:
+            return init_db()
+        return _db
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
