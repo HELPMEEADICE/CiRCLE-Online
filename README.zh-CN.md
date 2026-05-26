@@ -300,7 +300,7 @@ pytest tests/ -v
 
 ## 开源许可
 
-MIT —— 因为 Poppin'Party 相信分享快乐。（但别卖我们的灵魂。`soul.md` 文件是我们的。）
+[GNU General Public License v3.0](LICENSE) —— 因为 Poppin'Party 相信分享快乐。
 
 ---
 

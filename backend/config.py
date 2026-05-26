@@ -149,6 +149,11 @@ def save_port_assignments(assignments: dict[int, dict]):
     ports_path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _toml_multiline_string(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"""', '\\"""')
+    return f'"""{escaped}"""'
+
+
 def save_config(app_config: AppConfig):
     settings_path = CONFIG_DIR / "settings.toml"
     lines = []
@@ -186,8 +191,8 @@ def save_config(app_config: AppConfig):
     lines.append(f"max_context_messages = {app_config.orchestrator.max_context_messages}")
     lines.append(f"max_context_tokens = {app_config.orchestrator.max_context_tokens}")
     lines.append(f"group_reply_probability = {app_config.orchestrator.group_reply_probability}")
-    lines.append(f'prompt_prefix = """{app_config.orchestrator.prompt_prefix}"""')
-    lines.append(f'prompt_suffix = """{app_config.orchestrator.prompt_suffix}"""')
+    lines.append(f"prompt_prefix = {_toml_multiline_string(app_config.orchestrator.prompt_prefix)}")
+    lines.append(f"prompt_suffix = {_toml_multiline_string(app_config.orchestrator.prompt_suffix)}")
     lines.append(f"time_awareness = {'true' if app_config.orchestrator.time_awareness else 'false'}")
     lines.append("")
 

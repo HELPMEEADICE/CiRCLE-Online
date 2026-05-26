@@ -195,6 +195,8 @@ class SessionMemory:
     def get_context_for_character(self, character_name: str, bot_qq_map: dict[str, str]) -> list[ChatMessage]:
         """Transform messages for a specific character's perspective.
 
+        - Own bot replies -> assistant messages
+        - Other bot replies -> [Poppin'Party成员] {char_name}: content
         - Own messages (this character's QQ) -> [你]: raw_content
         - Other bot messages -> [Poppin'Party成员] {char_name}: raw_content
         - Human messages -> [sender_name]: raw_content  (unchanged)
@@ -213,7 +215,17 @@ class SessionMemory:
                 continue
 
             if msg.role == "assistant":
-                result.append(msg)
+                if msg.character == character_name or not msg.character:
+                    result.append(msg)
+                else:
+                    result.append(ChatMessage(
+                        role="user",
+                        content=f"[Poppin'Party成员] {msg.character}: {msg.content}",
+                        timestamp=msg.timestamp,
+                        character=msg.character,
+                        is_bot=True,
+                        sender_name=f"[Poppin'Party成员] {msg.character}",
+                    ))
                 continue
 
             raw = msg.raw_content if msg.raw_content is not None else msg.content
@@ -521,7 +533,7 @@ class Orchestrator:
             raw_content=processed_message,
             vision_content=vision_text or None,
             qq_id=user_id,
-            character=character_name,
+            character=bot_character if is_bot else None,
             is_bot=is_bot,
             sender_name=sender_name,
         ))

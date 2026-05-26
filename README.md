@@ -302,7 +302,7 @@ pytest tests/ -v
 
 ## License
 
-MIT — because Poppin'Party believes in sharing the joy. (But please don't sell our souls. The `soul.md` files are ours.)
+[GNU General Public License v3.0](LICENSE) — because Poppin'Party believes in sharing the joy.
 
 ---
 

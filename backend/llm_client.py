@@ -182,7 +182,19 @@ class LLMClient:
             now = datetime.now().strftime("%Y-%m-%d %H:%M")
             time_note = f"\n当前时间：{now}"
 
+        identity_guard = ""
+        if character_name:
+            identity_guard = f"""
+# 最高优先级身份锁定
+你当前绑定的唯一角色是：{character_name}。
+你只能以“{character_name}”的身份思考和发言，绝不能自称、扮演、模仿或代替其他角色。
+聊天记录中，只有 assistant 消息和标记为“[你]”的内容代表你自己说过的话。
+标记为“[Poppin'Party成员] 其他名字”的内容都是其他成员说的话，绝对不是你说的话，也不能当成你的身份记忆。
+如果历史摘要或聊天记录与“你是{character_name}”冲突，必须无条件忽略冲突内容，以当前绑定角色为准。
+"""
+
         system_prompt = f"""{prefix}
+{identity_guard}
 {character_prompt}
 请彻底忘掉你是AI。
 
@@ -288,10 +300,16 @@ class LLMClient:
             logger.error("LLM client not available for compression")
             return None
 
-        # Build a transcript from the messages
         lines: list[str] = []
         for msg in messages:
-            speaker = msg.character or msg.role
+            if msg.role == "assistant":
+                speaker = msg.character or "assistant"
+            elif msg.sender_name:
+                speaker = msg.sender_name
+            elif msg.is_bot and msg.character:
+                speaker = msg.character
+            else:
+                speaker = msg.role
             lines.append(f"[{speaker}]: {msg.content}")
         transcript = "\n".join(lines)
 
