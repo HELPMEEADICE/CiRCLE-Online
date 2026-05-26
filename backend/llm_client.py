@@ -179,7 +179,7 @@ class LLMClient:
         suffix = config.orchestrator.prompt_suffix
         time_note = ""
         if config.orchestrator.time_awareness:
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            now = datetime.now().strftime("%Y-%m-%d %H:%M")
             time_note = f"\n当前时间：{now}"
 
         system_prompt = f"""{prefix}
