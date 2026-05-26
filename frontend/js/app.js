@@ -490,7 +490,7 @@ class CircleOnlineApp {
             const response = await this.authedFetch(`${API_BASE}/api/orchestrator/auto-dialogue/config`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
+                body: JSON.stringify(payload.orchestrator.auto_dialogue),
             });
             if (!response.ok) throw new Error('Save failed');
             const data = await response.json();

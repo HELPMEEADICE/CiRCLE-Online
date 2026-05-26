@@ -336,6 +336,20 @@ async def get_config():
             "prompt_prefix": cfg.orchestrator.prompt_prefix,
             "prompt_suffix": cfg.orchestrator.prompt_suffix,
             "time_awareness": cfg.orchestrator.time_awareness,
+            "auto_dialogue": {
+                "enabled": cfg.orchestrator.auto_dialogue.enabled,
+                "chain_length": cfg.orchestrator.auto_dialogue.chain_length,
+                "cooldown_ms": cfg.orchestrator.auto_dialogue.cooldown_ms,
+                "trigger_probability": cfg.orchestrator.auto_dialogue.trigger_probability,
+                "initiation_probability": cfg.orchestrator.auto_dialogue.initiation_probability,
+                "initiation_interval_ms": cfg.orchestrator.auto_dialogue.initiation_interval_ms,
+            },
+            "context_compression": {
+                "enabled": cfg.orchestrator.context_compression.enabled,
+                "target_tokens": cfg.orchestrator.context_compression.target_tokens,
+                "reserve_recent": cfg.orchestrator.context_compression.reserve_recent,
+                "model": cfg.orchestrator.context_compression.model,
+            },
         },
         "chat": {
             "admin_qq": cfg.chat.admin_qq,
