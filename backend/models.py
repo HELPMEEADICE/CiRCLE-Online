@@ -51,7 +51,7 @@ class OneBotEvent(BaseModel):
 
 
 class MessageEvent(OneBotEvent):
-    message_id: Optional[str] = None
+    message_id: Optional[int] = None
     user_id: Optional[str] = None
     group_id: Optional[str] = None
     message_type: str = ""
