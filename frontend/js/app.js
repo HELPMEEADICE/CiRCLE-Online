@@ -233,6 +233,7 @@ class CircleOnlineApp {
 
         this.setField('cfg-reply_delay_ms', c.orchestrator.reply_delay_ms);
         this.setField('cfg-max_context_messages', c.orchestrator.max_context_messages);
+        this.setField('cfg-max_context_tokens', c.orchestrator.max_context_tokens);
         this.setField('cfg-group_reply_probability', c.orchestrator.group_reply_probability);
 
         this.setField('cfg-provider', c.llm.provider);
@@ -295,6 +296,7 @@ class CircleOnlineApp {
             orchestrator: {
                 reply_delay_ms: parseInt(this.getField('cfg-reply_delay_ms')) || null,
                 max_context_messages: parseInt(this.getField('cfg-max_context_messages')) || null,
+                max_context_tokens: parseInt(this.getField('cfg-max_context_tokens')) || null,
                 group_reply_probability: parseFloat(this.getField('cfg-group_reply_probability')) || null,
             },
         };

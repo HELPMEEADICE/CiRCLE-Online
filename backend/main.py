@@ -238,6 +238,7 @@ async def get_config():
             "enabled": cfg.orchestrator.enabled,
             "reply_delay_ms": cfg.orchestrator.reply_delay_ms,
             "max_context_messages": cfg.orchestrator.max_context_messages,
+            "max_context_tokens": cfg.orchestrator.max_context_tokens,
             "group_reply_probability": cfg.orchestrator.group_reply_probability,
             "prompt_prefix": cfg.orchestrator.prompt_prefix,
             "prompt_suffix": cfg.orchestrator.prompt_suffix,
@@ -271,6 +272,7 @@ class OrchestratorConfigUpdate(BaseModel):
     enabled: bool = None
     reply_delay_ms: int = None
     max_context_messages: int = None
+    max_context_tokens: int = None
     group_reply_probability: float = None
     prompt_prefix: str = None
     prompt_suffix: str = None
@@ -321,6 +323,8 @@ async def update_config(update: ConfigUpdate):
             current.orchestrator.reply_delay_ms = update.orchestrator.reply_delay_ms
         if update.orchestrator.max_context_messages is not None:
             current.orchestrator.max_context_messages = update.orchestrator.max_context_messages
+        if update.orchestrator.max_context_tokens is not None:
+            current.orchestrator.max_context_tokens = update.orchestrator.max_context_tokens
         if update.orchestrator.group_reply_probability is not None:
             current.orchestrator.group_reply_probability = update.orchestrator.group_reply_probability
         if update.orchestrator.prompt_prefix is not None:

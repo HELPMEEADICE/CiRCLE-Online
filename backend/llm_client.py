@@ -105,5 +105,60 @@ class LLMClient:
             system_prompt, messages, temperature, max_tokens, model=assistant_model
         )
 
+    async def compress_context(
+        self,
+        messages: list[ChatMessage],
+        character_name: str = "",
+        target_tokens: int = 2048,
+    ) -> Optional[ChatMessage]:
+        """Compress a list of messages into a single summary message using the assistant model.
+
+        Returns a ChatMessage(role='system') containing the summary, or None on failure.
+        """
+        if not messages:
+            return None
+
+        if not self._client:
+            logger.error("LLM client not available for compression")
+            return None
+
+        # Build a transcript from the messages
+        lines: list[str] = []
+        for msg in messages:
+            speaker = msg.character or msg.role
+            lines.append(f"[{speaker}]: {msg.content}")
+        transcript = "\n".join(lines)
+
+        compression_prompt = f"""你是一个上下文压缩助手。请将以下对话记录压缩为一段简洁的摘要，保留关键信息（人物关系、重要事件、情感状态、未完成的话题等）。
+摘要应以第三人称叙述，不超过{target_tokens}字。
+角色名: {character_name}
+
+对话记录:
+{transcript}
+
+请直接输出摘要内容，不要添加任何前缀或解释。"""
+
+        compress_model = config.orchestrator.context_compression.model or config.llm.assistant_model or config.llm.model
+
+        try:
+            response = await self._client.chat.completions.create(
+                model=compress_model,
+                messages=[{"role": "user", "content": compression_prompt}],
+                temperature=0.3,
+                max_tokens=target_tokens,
+            )
+            summary = response.choices[0].message.content
+            if not summary:
+                return None
+            logger.info(f"Context compressed: {len(transcript)} chars -> {len(summary)} chars")
+            return ChatMessage(
+                role="system",
+                content=f"[对话历史摘要]\n{summary}",
+                character=character_name,
+            )
+        except Exception as e:
+            logger.error(f"Context compression failed: {e}")
+            return None
+
 
 llm_client = LLMClient()

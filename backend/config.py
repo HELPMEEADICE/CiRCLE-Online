@@ -37,15 +37,24 @@ class AutoDialogueConfig(BaseSettings):
     initiation_interval_ms: int = 600000
 
 
+class ContextCompressionConfig(BaseSettings):
+    enabled: bool = True
+    target_tokens: int = 2048
+    reserve_recent: int = 4
+    model: str = ""
+
+
 class OrchestratorConfig(BaseSettings):
     enabled: bool = True
     reply_delay_ms: int = 1000
     max_context_messages: int = 20
+    max_context_tokens: int = 4096
     group_reply_probability: float = 0.3
     prompt_prefix: str = ""
     prompt_suffix: str = ""
     time_awareness: bool = False
     auto_dialogue: AutoDialogueConfig = Field(default_factory=AutoDialogueConfig)
+    context_compression: ContextCompressionConfig = Field(default_factory=ContextCompressionConfig)
 
 
 class LoggingConfig(BaseSettings):
@@ -142,10 +151,18 @@ def save_config(app_config: AppConfig):
     lines.append(f"enabled = {'true' if app_config.orchestrator.enabled else 'false'}")
     lines.append(f"reply_delay_ms = {app_config.orchestrator.reply_delay_ms}")
     lines.append(f"max_context_messages = {app_config.orchestrator.max_context_messages}")
+    lines.append(f"max_context_tokens = {app_config.orchestrator.max_context_tokens}")
     lines.append(f"group_reply_probability = {app_config.orchestrator.group_reply_probability}")
     lines.append(f'prompt_prefix = """{app_config.orchestrator.prompt_prefix}"""')
     lines.append(f'prompt_suffix = """{app_config.orchestrator.prompt_suffix}"""')
     lines.append(f"time_awareness = {'true' if app_config.orchestrator.time_awareness else 'false'}")
+    lines.append("")
+
+    lines.append("[orchestrator.context_compression]")
+    lines.append(f"enabled = {'true' if app_config.orchestrator.context_compression.enabled else 'false'}")
+    lines.append(f"target_tokens = {app_config.orchestrator.context_compression.target_tokens}")
+    lines.append(f"reserve_recent = {app_config.orchestrator.context_compression.reserve_recent}")
+    lines.append(f'model = "{app_config.orchestrator.context_compression.model}"')
     lines.append("")
 
     lines.append("[orchestrator.auto_dialogue]")

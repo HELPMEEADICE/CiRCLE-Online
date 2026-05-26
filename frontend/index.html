@@ -174,8 +174,13 @@
                                 </div>
                                 <div class="md3-field">
                                     <label class="md3-label">上下文消息数</label>
-                                    <input type="number" class="md3-input" id="cfg-max_context_messages" placeholder="20" min="1" max="100">
+                                    <input type="number" class="md3-input" id="cfg-max_context_messages" placeholder="20" min="1">
                                     <span class="md3-helper">发送给 LLM 的最近消息数量</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">上下文最大 Token</label>
+                                    <input type="number" class="md3-input" id="cfg-max_context_tokens" placeholder="4096" min="256">
+                                    <span class="md3-helper">上下文总 Token 上限，超出后自动压缩（0 表示不限制）</span>
                                 </div>
                                 <div class="md3-field">
                                     <label class="md3-label">随机回复概率</label>

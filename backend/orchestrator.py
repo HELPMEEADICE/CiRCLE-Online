@@ -7,36 +7,112 @@ from backend.models import ChatMessage, CharacterAssignment
 from backend.config import config, load_port_assignments, save_port_assignments
 from backend.llm_client import llm_client
 from backend.character_manager import character_manager
+from backend.token_counter import count_message_tokens, count_single_message_tokens, truncate_messages_to_token_budget
 from backend.utils import get_logger, parse_message_text, build_text_message
 
 logger = get_logger("orchestrator")
 
 
 class SessionMemory:
-    def __init__(self, max_messages: int = 20):
+    """Token-aware session memory with automatic compression via auxiliary model."""
+
+    def __init__(self, max_messages: int = 20, max_tokens: int = 4096):
         self.messages: list[ChatMessage] = []
         self.max_messages = max_messages
+        self.max_tokens = max_tokens
+        self._total_tokens: int = 0
+        self._compressing: bool = False
 
     def add(self, message: ChatMessage):
+        msg_tokens = count_single_message_tokens(message)
         self.messages.append(message)
+        self._total_tokens += msg_tokens
+
+        # Hard cap on message count
         if len(self.messages) > self.max_messages:
+            removed = self.messages[:-self.max_messages]
             self.messages = self.messages[-self.max_messages:]
+            self._total_tokens = count_message_tokens(self.messages)
+
+        # If tokens exceed budget and not already compressing, schedule compression
+        if self._total_tokens > self.max_tokens and not self._compressing:
+            self._compressing = True
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._compress())
+            except RuntimeError:
+                # No running loop — sync fallback: just truncate
+                self._truncate_sync()
+
+    async def _compress(self):
+        """Compress old messages using the auxiliary model, keeping recent ones intact."""
+        compression_cfg = config.orchestrator.context_compression
+        reserve = compression_cfg.reserve_recent
+
+        if len(self.messages) <= reserve:
+            self._compressing = False
+            return
+
+        # Split into old (to compress) and recent (to keep)
+        old_messages = self.messages[:-reserve]
+        recent_messages = self.messages[-reserve:]
+
+        character_name = ""
+        for msg in reversed(self.messages):
+            if msg.character:
+                character_name = msg.character
+                break
+
+        summary_msg = await llm_client.compress_context(
+            messages=old_messages,
+            character_name=character_name,
+            target_tokens=compression_cfg.target_tokens,
+        )
+
+        if summary_msg:
+            self.messages = [summary_msg] + recent_messages
+            self._total_tokens = count_message_tokens(self.messages)
+            logger.info(
+                f"Context compressed: {len(old_messages)} msgs -> 1 summary, "
+                f"total tokens now {self._total_tokens}"
+            )
+        else:
+            # Compression failed — fall back to simple truncation
+            self._truncate_sync()
+
+        self._compressing = False
+
+    def _truncate_sync(self):
+        """Sync fallback: keep messages within token budget by dropping oldest."""
+        self.messages = truncate_messages_to_token_budget(self.messages, self.max_tokens)
+        self._total_tokens = count_message_tokens(self.messages)
+        logger.warning(f"Context truncated to {len(self.messages)} msgs, {self._total_tokens} tokens")
 
     def get_context(self, last_n: int = None) -> list[ChatMessage]:
         if last_n:
             return self.messages[-last_n:]
         return self.messages.copy()
 
+    def get_token_count(self) -> int:
+        return self._total_tokens
+
     def clear(self):
         self.messages.clear()
+        self._total_tokens = 0
 
 
 class Orchestrator:
     def __init__(self):
         self._enabled = config.orchestrator.enabled
         self._assignments: dict[int, str] = {}
-        self._sessions: dict[int, SessionMemory] = defaultdict(lambda: SessionMemory(config.orchestrator.max_context_messages))
-        self._group_sessions: dict[str, dict[str, SessionMemory]] = defaultdict(lambda: defaultdict(lambda: SessionMemory(config.orchestrator.max_context_messages)))
+        self._sessions: dict[int, SessionMemory] = defaultdict(
+            lambda: SessionMemory(config.orchestrator.max_context_messages, config.orchestrator.max_context_tokens)
+        )
+        self._group_sessions: dict[str, dict[str, SessionMemory]] = defaultdict(
+            lambda: defaultdict(
+                lambda: SessionMemory(config.orchestrator.max_context_messages, config.orchestrator.max_context_tokens)
+            )
+        )
         self._ws_server = None
         self._load_assignments()
         
