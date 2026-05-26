@@ -4,7 +4,7 @@ from typing import Optional
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from backend.llm_client import llm_client, RoleplayResponse
+from backend.llm_client import RoleplayResponse
 from backend.models import ChatMessage, CharacterAssignment
 from backend.config import config, load_port_assignments, save_port_assignments
 from backend.token_counter import count_message_tokens, count_single_message_tokens, truncate_messages_to_token_budget

@@ -337,8 +337,7 @@ _llm_client = None
 
 def init_llm_client():
     global _llm_client
-    if _llm_client is None:
-        _llm_client = LLMClient()
+    _llm_client = LLMClient()
     return _llm_client
 
 
