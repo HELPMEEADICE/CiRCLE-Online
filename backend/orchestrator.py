@@ -3,6 +3,7 @@ import random
 from typing import Optional
 from collections import defaultdict
 from datetime import datetime
+from pathlib import Path
 from backend.models import ChatMessage, CharacterAssignment
 from backend.config import config, load_port_assignments, save_port_assignments
 from backend.llm_client import llm_client
@@ -12,6 +13,28 @@ from backend.utils import get_logger, parse_message_text, build_text_message, ex
 from backend.database import db
 
 logger = get_logger("orchestrator")
+
+CONTEXT_COMPRESSION_PATH = Path(__file__).parent.parent / "data" / "Context_Compression.md"
+
+
+def load_context_compression(session_key: str) -> str:
+    if not CONTEXT_COMPRESSION_PATH.exists():
+        return ""
+
+    content = CONTEXT_COMPRESSION_PATH.read_text(encoding="utf-8")
+    current_key = None
+    current_lines: list[str] = []
+    for line in content.split("\n"):
+        if line.startswith("# Session: "):
+            if current_key == session_key:
+                return "\n".join(current_lines).strip()
+            current_key = line[len("# Session: "):].strip()
+            current_lines = []
+        else:
+            current_lines.append(line)
+    if current_key == session_key:
+        return "\n".join(current_lines).strip()
+    return ""
 
 
 class SessionMemory:
@@ -105,28 +128,56 @@ class SessionMemory:
         )
 
         if summary_msg:
-            await db.delete_messages_by_ids(old_db_ids)
+            marker_id = max(old_db_ids) if old_db_ids else 0
+            await db.save_compression_marker(self.session_key, marker_id)
 
-            summary_db_id = await db.save_message(
-                session_key=self.session_key,
-                role=summary_msg.role,
-                content=summary_msg.content,
-                raw_content=summary_msg.raw_content,
-                vision_content=summary_msg.vision_content,
-                timestamp=summary_msg.timestamp.timestamp(),
-            )
+            self._save_context_compression_file(summary_msg.content)
 
-            self.messages = [summary_msg] + recent_messages
-            self._db_ids = [summary_db_id] + recent_db_ids
+            self.messages = recent_messages
+            self._db_ids = recent_db_ids
             self._total_tokens = count_message_tokens(self.messages)
             logger.info(
-                f"Context compressed: {len(old_messages)} msgs -> 1 summary, "
-                f"total tokens now {self._total_tokens}"
+                f"Context compressed: {len(old_messages)} msgs archived (marker={marker_id}), "
+                f"kept {len(recent_messages)} recent msgs, total tokens now {self._total_tokens}"
             )
         else:
             await self._truncate_async()
 
         self._compressing = False
+
+    def _save_context_compression_file(self, summary: str):
+        CONTEXT_COMPRESSION_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+        sections: dict[str, str] = {}
+        if CONTEXT_COMPRESSION_PATH.exists():
+            content = CONTEXT_COMPRESSION_PATH.read_text(encoding="utf-8")
+            current_key = None
+            current_lines: list[str] = []
+            for line in content.split("\n"):
+                if line.startswith("# Session: "):
+                    if current_key:
+                        sections[current_key] = "\n".join(current_lines).strip()
+                    current_key = line[len("# Session: "):].strip()
+                    current_lines = []
+                else:
+                    current_lines.append(line)
+            if current_key:
+                sections[current_key] = "\n".join(current_lines).strip()
+
+        existing = sections.get(self.session_key, "")
+        if existing:
+            sections[self.session_key] = f"{existing}\n{summary}"
+        else:
+            sections[self.session_key] = summary
+
+        lines = []
+        for key, text in sections.items():
+            lines.append(f"# Session: {key}")
+            lines.append(text)
+            lines.append("")
+
+        CONTEXT_COMPRESSION_PATH.write_text("\n".join(lines), encoding="utf-8")
+        logger.info(f"Context compression saved to {CONTEXT_COMPRESSION_PATH} for session '{self.session_key}'")
 
     async def _truncate_async(self):
         kept = truncate_messages_to_token_budget(self.messages, self.max_tokens)
@@ -213,6 +264,39 @@ class SessionMemory:
         self._db_ids.clear()
         self._total_tokens = 0
         await db.clear_session(self.session_key)
+        self._clear_context_compression_file()
+
+    def _clear_context_compression_file(self):
+        if not CONTEXT_COMPRESSION_PATH.exists():
+            return
+
+        content = CONTEXT_COMPRESSION_PATH.read_text(encoding="utf-8")
+        sections: dict[str, str] = {}
+        current_key = None
+        current_lines: list[str] = []
+        for line in content.split("\n"):
+            if line.startswith("# Session: "):
+                if current_key:
+                    sections[current_key] = "\n".join(current_lines).strip()
+                current_key = line[len("# Session: "):].strip()
+                current_lines = []
+            else:
+                current_lines.append(line)
+        if current_key:
+            sections[current_key] = "\n".join(current_lines).strip()
+
+        if self.session_key in sections:
+            del sections[self.session_key]
+
+        if sections:
+            lines = []
+            for key, text in sections.items():
+                lines.append(f"# Session: {key}")
+                lines.append(text)
+                lines.append("")
+            CONTEXT_COMPRESSION_PATH.write_text("\n".join(lines), encoding="utf-8")
+        else:
+            CONTEXT_COMPRESSION_PATH.unlink(missing_ok=True)
 
 
 class Orchestrator:
@@ -377,6 +461,10 @@ class Orchestrator:
             logger.warning(f"No system prompt for character: {character_name}")
             return
 
+        compression_context = load_context_compression(session.session_key)
+        if compression_context:
+            system_prompt = f"{system_prompt}\n\n[历史对话压缩摘要]\n{compression_context}"
+
         context = session.get_context_for_character(character_name, self._bot_qq_map)
         response = await llm_client.generate_roleplay_response(
             character_prompt=system_prompt,
@@ -444,6 +532,10 @@ class Orchestrator:
         system_prompt = character_manager.get_system_prompt(character_name)
         if not system_prompt:
             return
+
+        compression_context = load_context_compression(session.session_key)
+        if compression_context:
+            system_prompt = f"{system_prompt}\n\n[历史对话压缩摘要]\n{compression_context}"
 
         context = session.get_context()
         response = await llm_client.generate_roleplay_response(
@@ -519,6 +611,10 @@ class Orchestrator:
             if not system_prompt:
                 continue
 
+            compression_context = load_context_compression(session.session_key)
+            if compression_context:
+                system_prompt = f"{system_prompt}\n\n[历史对话压缩摘要]\n{compression_context}"
+
             context = session.get_context_for_character(char_name, self._bot_qq_map)
             response = await llm_client.generate_roleplay_response(
                 character_prompt=system_prompt,
@@ -571,6 +667,10 @@ class Orchestrator:
         system_prompt = character_manager.get_system_prompt(initiating_char)
         if not system_prompt:
             return
+
+        compression_context = load_context_compression(session.session_key)
+        if compression_context:
+            system_prompt = f"{system_prompt}\n\n[历史对话压缩摘要]\n{compression_context}"
 
         context = session.get_context_for_character(initiating_char, self._bot_qq_map)
         initiation_prompt = f"请以{initiating_char}的身份，根据当前对话上下文，主动发起一个新的对话话题或回应之前的对话。保持角色性格特点，回复要自然、简洁。"
