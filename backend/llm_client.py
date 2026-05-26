@@ -1,10 +1,28 @@
 import asyncio
+import json
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 from openai import AsyncOpenAI
 from backend.config import config
 from backend.models import ChatMessage
 from backend.utils import get_logger
+
+
+@dataclass
+class ToolCall:
+    id: str
+    function_name: str
+    arguments: dict
+
+
+@dataclass
+class RoleplayResponse:
+    content: Optional[str]
+    tool_calls: list[ToolCall] = field(default_factory=list)
+
+    def __bool__(self):
+        return self.content is not None or len(self.tool_calls) > 0
 
 logger = get_logger("llm_client")
 
@@ -113,6 +131,7 @@ class LLMClient:
         max_tokens: int = None,
         model: str = None,
         thinking: str = "default",
+        tools: list[dict] = None,
     ) -> Optional[str]:
         if not self._client:
             logger.error("LLM client not available")
@@ -132,6 +151,8 @@ class LLMClient:
                 temperature=temperature or config.llm.temperature,
                 max_tokens=max_tokens or config.llm.max_tokens,
             )
+            if tools:
+                kwargs["tools"] = tools
             extra_body = self._get_extra_body(thinking)
             if extra_body:
                 kwargs["extra_body"] = extra_body
@@ -149,7 +170,8 @@ class LLMClient:
         context: list[ChatMessage],
         user_message: str,
         character_name: str = "",
-    ) -> Optional[str]:
+        tools: list[dict] = None,
+    ) -> RoleplayResponse | None:
         messages = context.copy()
         messages.append(ChatMessage(role="user", content=user_message))
 
@@ -171,21 +193,73 @@ class LLMClient:
 # 核心群聊法则（违规即死）
 1. 极简短打：单条回复绝对不能超过20-30个字，能用两三个字解决的绝不多废话。
 2. 纯文本输入：严禁使用任何Markdown排版（杜绝粗体、列表、代码块、分割线）。
-3. 拒绝结构化：严禁出现“第一、首先、总之、分段”等任何有条理的AI腔调。
-4. 严禁括号表演：绝对不许使用括号描写动作或心理（例如：严禁出现“(笑)”、“(无辜眨眼)”）。
+3. 拒绝结构化：严禁出现"第一、首先、总之、分段"等任何有条理的AI腔调。
+4. 严禁括号表演：绝对不许使用括号描写动作或心理（例如：严禁出现"(笑)"、"(无辜眨眼)"）。
 5. 手机打字流：说话要口语化，多用网络梗、语气词（哈、嘛、笑死、啊这），少用或不用句号，多用省略号（……）或直接空格。
 6. 碎屑化互动：每次只接梗或吐槽最新的一句话，把话头抛给别人，保持正在实时打字的状态。
 
 # 经典反例（绝对不许学）
-“哈哈，这个想法很有趣呢！(赞同地微笑) 首先，我们可以从以下几个方面考虑：1. 时间问题……” —— 看到这种直接踢出群聊。
+"哈哈，这个想法很有趣呢！(赞同地微笑) 首先，我们可以从以下几个方面考虑：1. 时间问题……" —— 看到这种直接踢出群聊。
 
 # 正确示范（严格模仿）
-- “笑死，真的假的”
-- “啊这……倒也不必吧”
-- “等等，你刚才说什么来着？我瞅瞅”
+- "笑死，真的假的"
+- "啊这……倒也不必吧"
+- "等等，你刚才说什么来着？我瞅瞅"
 {suffix}{time_note}"""
 
-        return await self.generate_response(system_prompt, messages, thinking=config.llm.model_thinking)
+        if not tools:
+            content = await self.generate_response(
+                system_prompt, messages, thinking=config.llm.model_thinking
+            )
+            if content is None:
+                return None
+            return RoleplayResponse(content=content)
+
+        # With tools — returns RoleplayResponse with content + tool_calls
+        if not self._client:
+            logger.error("LLM client not available")
+            return None
+
+        formatted_messages = [{"role": "system", "content": system_prompt}]
+        for msg in messages:
+            formatted_messages.append({"role": msg.role, "content": msg.content})
+
+        try:
+            response = await self._client.chat.completions.create(
+                model=config.llm.model,
+                messages=formatted_messages,
+                temperature=config.llm.temperature,
+                max_tokens=config.llm.max_tokens,
+                tools=tools,
+                extra_body=self._get_extra_body(config.llm.model_thinking) or {},
+            )
+            choice = response.choices[0]
+            message = choice.message
+            content = message.content
+
+            parsed_tool_calls = []
+            if message.tool_calls:
+                for tc in message.tool_calls:
+                    try:
+                        args = json.loads(tc.function.arguments)
+                    except (json.JSONDecodeError, TypeError):
+                        args = {}
+                    parsed_tool_calls.append(ToolCall(
+                        id=tc.id,
+                        function_name=tc.function.name,
+                        arguments=args,
+                    ))
+
+            if content:
+                logger.debug(f"LLM response: {content[:100]}...")
+            if parsed_tool_calls:
+                logger.info(f"LLM requested {len(parsed_tool_calls)} tool call(s): "
+                            f"{[tc.function_name for tc in parsed_tool_calls]}")
+
+            return RoleplayResponse(content=content, tool_calls=parsed_tool_calls)
+        except Exception as e:
+            logger.error(f"LLM API error: {e}")
+            return None
 
     async def generate_assistant_response(
         self,

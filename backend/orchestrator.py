@@ -4,6 +4,7 @@ from typing import Optional
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
+from backend.llm_client import llm_client, RoleplayResponse
 from backend.models import ChatMessage, CharacterAssignment
 from backend.config import config, load_port_assignments, save_port_assignments
 from backend.token_counter import count_message_tokens, count_single_message_tokens, truncate_messages_to_token_budget
@@ -294,6 +295,38 @@ class SessionMemory:
         else:
             CONTEXT_COMPRESSION_PATH.unlink(missing_ok=True)
 
+_BAN_TOOL = [{
+    "type": "function",
+    "function": {
+        "name": "set_group_ban",
+        "description": (
+            "对群内某用户执行禁言操作。这是一个极其严肃的管理手段，只有在用户持续恶意骚扰、"
+            "发送违规内容、严重影响群聊秩序时才可使用。绝对不允许因为普通聊天、开玩笑、"
+            "意见不同、轻微冒犯等理由使用。滥用此功能会导致群聊氛围恶化。"
+            "默认禁言10分钟，除非情况特别严重否则不要设置更长时间。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "group_id": {
+                    "type": "string",
+                    "description": "群号",
+                },
+                "user_id": {
+                    "type": "string",
+                    "description": "要禁言的用户QQ号",
+                },
+                "duration": {
+                    "type": "integer",
+                    "description": "禁言时长（秒），默认600（10分钟）。0表示解除禁言。如非特别严重，不要超过600秒。",
+                    "default": 600,
+                },
+            },
+            "required": ["group_id", "user_id"],
+        },
+    },
+}]
+
 
 class Orchestrator:
     def __init__(self):
@@ -390,7 +423,6 @@ class Orchestrator:
         return self._private_sessions[session_key]
 
     async def handle_group_message(self, port: int, data: dict):
-        from backend.llm_client import llm_client
         from backend.character_manager import character_manager
         if not self._enabled:
             return
@@ -471,20 +503,30 @@ class Orchestrator:
             context=context,
             user_message=raw_message,
             character_name=character_name,
+            tools=_BAN_TOOL,
         )
 
         if response:
-            await session.add(ChatMessage(
-                role="assistant",
-                content=response,
-                character=character_name,
-            ))
+            tool_results = []
+            if response.tool_calls:
+                tool_results = await self._execute_tool_calls(response.tool_calls, group_id, port)
 
-            await self._send_reply(port, group_id, response)
+            reply_text = response.content
+            if tool_results and not reply_text:
+                reply_text = tool_results[0]
+
+            if reply_text:
+                await session.add(ChatMessage(
+                    role="assistant",
+                    content=reply_text,
+                    character=character_name,
+                ))
+                await self._send_reply(port, group_id, reply_text)
 
             if config.orchestrator.auto_dialogue.enabled:
                 self._chain_counters[group_id][character_name] = 0
-                await self.handle_ai_reply(port, group_id, character_name, response, depth=0)
+                if reply_text:
+                    await self.handle_ai_reply(port, group_id, character_name, reply_text, depth=0)
 
     async def handle_private_message(self, port: int, data: dict):
         from backend.llm_client import llm_client
@@ -547,14 +589,14 @@ class Orchestrator:
             character_name=character_name,
         )
 
-        if response:
+        if response and response.content:
             await session.add(ChatMessage(
                 role="assistant",
-                content=response,
+                content=response.content,
                 character=character_name,
             ))
 
-            await self._send_private_reply(port, user_id, response)
+            await self._send_private_reply(port, user_id, response.content)
 
     def _should_reply(self, message: str, character_name: str) -> bool:
         if f"@{character_name}" in message:
@@ -566,6 +608,41 @@ class Orchestrator:
                 return True
 
         return random.random() < config.orchestrator.group_reply_probability
+
+    async def _execute_tool_calls(self, tool_calls, group_id: str, port: int) -> list[str]:
+        results = []
+        for tc in tool_calls:
+            if tc.function_name == "set_group_ban":
+                target_group = tc.arguments.get("group_id", group_id)
+                target_user = tc.arguments.get("user_id", "")
+                duration = int(tc.arguments.get("duration", 600))
+                if not target_user:
+                    results.append(f"[set_group_ban] 缺少user_id参数")
+                    continue
+                conn = self._ws_server.get_connection(port) if self._ws_server else None
+                if not conn:
+                    results.append(f"[set_group_ban] 无法连接到端口{port}")
+                    continue
+                try:
+                    resp = await conn.send_action("set_group_ban", {
+                        "group_id": target_group,
+                        "user_id": target_user,
+                        "duration": duration,
+                    })
+                    status = resp.get("status", "unknown")
+                    retcode = resp.get("retcode", -1)
+                    if status == "ok" and retcode == 0:
+                        results.append(f"[set_group_ban] 已禁言用户{target_user}，时长{duration}秒")
+                        logger.warning(f"[BAN] group={target_group} user={target_user} duration={duration}s")
+                    else:
+                        results.append(f"[set_group_ban] 禁言失败: {resp.get('message', '未知错误')}")
+                        logger.error(f"[BAN FAILED] {resp}")
+                except Exception as e:
+                    results.append(f"[set_group_ban] 执行异常: {e}")
+                    logger.error(f"[BAN ERROR] {e}")
+            else:
+                results.append(f"[{tc.function_name}] 未知的工具调用")
+        return results
 
     def _find_port_for_character(self, character_name: str) -> Optional[int]:
         for p, c in self._assignments.items():
@@ -627,18 +704,18 @@ class Orchestrator:
                 character_name=char_name,
             )
 
-            if response:
+            if response and response.content:
                 self._chain_counters[group_id][char_name] += 1
 
                 await session.add(ChatMessage(
                     role="assistant",
-                    content=response,
+                    content=response.content,
                     character=char_name,
                 ))
 
-                await self._send_reply(char_port, group_id, response)
+                await self._send_reply(char_port, group_id, response.content)
 
-                await self.handle_ai_reply(char_port, group_id, char_name, response, depth=depth + 1)
+                await self.handle_ai_reply(char_port, group_id, char_name, response.content, depth=depth + 1)
 
     def _should_initiate_dialogue(self, group_id: str) -> bool:
         if not config.orchestrator.auto_dialogue.enabled:
@@ -688,19 +765,19 @@ class Orchestrator:
             character_name=initiating_char,
         )
 
-        if response:
+        if response and response.content:
             self._last_initiation_time[group_id] = datetime.now()
 
             await session.add(ChatMessage(
                 role="assistant",
-                content=response,
+                content=response.content,
                 character=initiating_char,
             ))
 
-            await self._send_reply(char_port, group_id, response)
+            await self._send_reply(char_port, group_id, response.content)
 
             self._chain_counters[group_id][initiating_char] = 0
-            await self.handle_ai_reply(char_port, group_id, initiating_char, response, depth=0)
+            await self.handle_ai_reply(char_port, group_id, initiating_char, response.content, depth=0)
 
     def reset_chain_counters(self, group_id: str = None):
         if group_id:
