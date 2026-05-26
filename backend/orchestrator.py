@@ -36,6 +36,7 @@ class SessionMemory:
                 character=row["character"],
                 qq_id=row["qq_id"],
                 raw_content=row["raw_content"],
+                vision_content=row["vision_content"],
                 is_bot=bool(row["is_bot"]),
                 sender_name=row["sender_name"],
             )
@@ -54,6 +55,7 @@ class SessionMemory:
             role=message.role,
             content=message.content,
             raw_content=message.raw_content,
+            vision_content=message.vision_content,
             qq_id=message.qq_id,
             character=message.character,
             is_bot=message.is_bot,
@@ -110,6 +112,7 @@ class SessionMemory:
                 role=summary_msg.role,
                 content=summary_msg.content,
                 raw_content=summary_msg.raw_content,
+                vision_content=summary_msg.vision_content,
                 timestamp=summary_msg.timestamp.timestamp(),
             )
 
@@ -166,6 +169,8 @@ class SessionMemory:
                 continue
 
             raw = msg.raw_content if msg.raw_content is not None else msg.content
+            if msg.vision_content:
+                raw = f"{raw} [图片内容: {msg.vision_content}]" if raw.strip() else f"[图片内容: {msg.vision_content}]"
 
             if msg.qq_id and msg.qq_id == own_qq_id:
                 transformed = ChatMessage(
@@ -174,7 +179,8 @@ class SessionMemory:
                     timestamp=msg.timestamp,
                     qq_id=msg.qq_id,
                     character=msg.character,
-                    raw_content=raw,
+                    raw_content=msg.raw_content,
+                    vision_content=msg.vision_content,
                     is_bot=msg.is_bot,
                     sender_name="你",
                 )
@@ -186,7 +192,8 @@ class SessionMemory:
                     timestamp=msg.timestamp,
                     qq_id=msg.qq_id,
                     character=msg.character,
-                    raw_content=raw,
+                    raw_content=msg.raw_content,
+                    vision_content=msg.vision_content,
                     is_bot=True,
                     sender_name=f"[Poppin'Party成员] {other_char}",
                 )
@@ -322,6 +329,7 @@ class Orchestrator:
             return
 
         image_urls = extract_image_urls(message_segments)
+        vision_text = ""
         if image_urls and config.llm.vision.enabled and llm_client.is_vision_available:
             vision_descriptions = []
             for url in image_urls:
@@ -329,10 +337,7 @@ class Orchestrator:
                 if desc:
                     vision_descriptions.append(desc)
             if vision_descriptions:
-                raw_message = raw_message.replace("[图片]", "")
-                raw_message = raw_message.strip()
                 vision_text = " ".join(vision_descriptions)
-                raw_message = f"{raw_message} [图片内容: {vision_text}]" if raw_message else f"[图片内容: {vision_text}]"
 
         sender = data.get("sender", {})
         sender_name = sender.get("card", "") or sender.get("nickname", "")
@@ -347,11 +352,14 @@ class Orchestrator:
         display_content = f"[{sender_name}]: {raw_message}"
         if is_bot:
             display_content = f"[Poppin'Party成员] {sender_name}: {raw_message}"
+        if vision_text:
+            display_content = f"{display_content} [图片内容: {vision_text}]"
 
         await session.add(ChatMessage(
             role="user",
             content=display_content,
             raw_content=raw_message,
+            vision_content=vision_text or None,
             qq_id=user_id,
             character=character_name,
             is_bot=is_bot,
@@ -409,6 +417,7 @@ class Orchestrator:
             return
 
         image_urls = extract_image_urls(message_segments)
+        vision_text = ""
         if image_urls and config.llm.vision.enabled and llm_client.is_vision_available:
             vision_descriptions = []
             for url in image_urls:
@@ -416,16 +425,18 @@ class Orchestrator:
                 if desc:
                     vision_descriptions.append(desc)
             if vision_descriptions:
-                raw_message = raw_message.replace("[图片]", "")
-                raw_message = raw_message.strip()
                 vision_text = " ".join(vision_descriptions)
-                raw_message = f"{raw_message} [图片内容: {vision_text}]" if raw_message else f"[图片内容: {vision_text}]"
 
         session = await self._get_private_session(user_id, character_name)
+        display_content = raw_message
+        if vision_text:
+            display_content = f"{raw_message} [图片内容: {vision_text}]" if raw_message.strip() else f"[图片内容: {vision_text}]"
+
         await session.add(ChatMessage(
             role="user",
-            content=raw_message,
+            content=display_content,
             raw_content=raw_message,
+            vision_content=vision_text or None,
             qq_id=user_id,
             character=character_name,
         ))

@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS messages (
     role TEXT NOT NULL,
     content TEXT NOT NULL,
     raw_content TEXT,
+    vision_content TEXT,
     qq_id TEXT,
     character TEXT,
     is_bot INTEGER DEFAULT 0,
@@ -53,6 +54,7 @@ class ChatDatabase:
         role: str,
         content: str,
         raw_content: str = None,
+        vision_content: str = None,
         qq_id: str = None,
         character: str = None,
         is_bot: bool = False,
@@ -67,9 +69,9 @@ class ChatDatabase:
 
         cursor = await self._db.execute(
             """INSERT INTO messages
-               (session_key, role, content, raw_content, qq_id, character, is_bot, sender_name, timestamp)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (session_key, role, content, raw_content, qq_id, character,
+               (session_key, role, content, raw_content, vision_content, qq_id, character, is_bot, sender_name, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (session_key, role, content, raw_content, vision_content, qq_id, character,
              1 if is_bot else 0, sender_name, timestamp),
         )
         await self._db.commit()
@@ -80,7 +82,7 @@ class ChatDatabase:
             raise RuntimeError("Database not initialized")
 
         cursor = await self._db.execute(
-            """SELECT id, session_key, role, content, raw_content, qq_id,
+            """SELECT id, session_key, role, content, raw_content, vision_content, qq_id,
                       character, is_bot, sender_name, timestamp
                FROM messages WHERE session_key = ? ORDER BY id ASC""",
             (session_key,),
