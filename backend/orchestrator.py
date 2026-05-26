@@ -677,23 +677,36 @@ class Orchestrator:
                 if not conn:
                     results.append(f"[set_group_ban] 无法连接到端口{port}")
                     continue
-                try:
-                    resp = await conn.send_action("set_group_ban", {
-                        "group_id": target_group,
-                        "user_id": target_user,
-                        "duration": duration,
-                    })
-                    status = resp.get("status", "unknown")
-                    retcode = resp.get("retcode", -1)
-                    if status == "ok" and retcode == 0:
-                        results.append(f"[set_group_ban] 已禁言用户{target_user}，时长{duration}秒")
-                        logger.warning(f"[BAN] group={target_group} user={target_user} duration={duration}s")
-                    else:
-                        results.append(f"[set_group_ban] 禁言失败: {resp.get('message', '未知错误')}")
-                        logger.error(f"[BAN FAILED] {resp}")
-                except Exception as e:
-                    results.append(f"[set_group_ban] 执行异常: {e}")
-                    logger.error(f"[BAN ERROR] {e}")
+                max_retries = 2
+                for attempt in range(max_retries + 1):
+                    try:
+                        resp = await conn.send_action("set_group_ban", {
+                            "group_id": target_group,
+                            "user_id": target_user,
+                            "duration": duration,
+                        }, timeout=30.0)
+                        status = resp.get("status", "unknown")
+                        retcode = resp.get("retcode", -1)
+                        if status == "ok" and retcode == 0:
+                            results.append(f"[set_group_ban] 已禁言用户{target_user}，时长{duration}秒")
+                            logger.warning(f"[BAN] group={target_group} user={target_user} duration={duration}s")
+                            break
+                        else:
+                            if attempt < max_retries:
+                                logger.warning(f"[BAN RETRY] group={target_group} user={target_user} duration={duration} attempt={attempt+1} response={resp}")
+                                await asyncio.sleep(2)
+                                continue
+                            else:
+                                results.append(f"[set_group_ban] 禁言失败: {resp.get('message', '未知错误')}")
+                                logger.error(f"[BAN FAILED] group={target_group} user={target_user} duration={duration} response={resp}")
+                    except Exception as e:
+                        if attempt < max_retries:
+                            logger.warning(f"[BAN RETRY] group={target_group} user={target_user} duration={duration} attempt={attempt+1} error={e}")
+                            await asyncio.sleep(2)
+                            continue
+                        else:
+                            results.append(f"[set_group_ban] 执行异常: {e}")
+                            logger.error(f"[BAN ERROR] group={target_group} user={target_user} duration={duration} error={e}")
             elif tc.function_name == "set_msg_emoji_like":
                 msg_id = tc.arguments.get("message_id", 0)
                 emoji_id = tc.arguments.get("emoji_id", "")
@@ -704,24 +717,37 @@ class Orchestrator:
                 if not conn:
                     results.append(f"[set_msg_emoji_like] 无法连接到端口{port}")
                     continue
-                try:
-                    resp = await conn.send_action("set_msg_emoji_like", {
-                        "message_id": msg_id,
-                        "emoji_id": emoji_id,
-                    })
-                    status = resp.get("status", "unknown")
-                    retcode = resp.get("retcode", -1)
-                    if status == "ok" and retcode == 0:
-                        emoji_names = {"128027": "🐛", "128053": "🐵", "128051": "🐳"}
-                        emoji_display = emoji_names.get(emoji_id, emoji_id)
-                        results.append(f"[set_msg_emoji_like] 已添加表情回应 {emoji_display}")
-                        logger.info(f"[EMOJI] message={msg_id} emoji={emoji_id}")
-                    else:
-                        results.append(f"[set_msg_emoji_like] 失败: {resp.get('message', '未知错误')}")
-                        logger.error(f"[EMOJI FAILED] {resp}")
-                except Exception as e:
-                    results.append(f"[set_msg_emoji_like] 执行异常: {e}")
-                    logger.error(f"[EMOJI ERROR] {e}")
+                max_retries = 2
+                for attempt in range(max_retries + 1):
+                    try:
+                        resp = await conn.send_action("set_msg_emoji_like", {
+                            "message_id": msg_id,
+                            "emoji_id": emoji_id,
+                        }, timeout=30.0)
+                        status = resp.get("status", "unknown")
+                        retcode = resp.get("retcode", -1)
+                        if status == "ok" and retcode == 0:
+                            emoji_names = {"128027": "🐛", "128053": "🐵", "128051": "🐳"}
+                            emoji_display = emoji_names.get(emoji_id, emoji_id)
+                            results.append(f"[set_msg_emoji_like] 已添加表情回应 {emoji_display}")
+                            logger.info(f"[EMOJI] message={msg_id} emoji={emoji_id}")
+                            break
+                        else:
+                            if attempt < max_retries:
+                                logger.warning(f"[EMOJI RETRY] message={msg_id} emoji={emoji_id} attempt={attempt+1} response={resp}")
+                                await asyncio.sleep(2)
+                                continue
+                            else:
+                                results.append(f"[set_msg_emoji_like] 失败: {resp.get('message', '未知错误')}")
+                                logger.error(f"[EMOJI FAILED] message={msg_id} emoji={emoji_id} response={resp}")
+                    except Exception as e:
+                        if attempt < max_retries:
+                            logger.warning(f"[EMOJI RETRY] message={msg_id} emoji={emoji_id} attempt={attempt+1} error={e}")
+                            await asyncio.sleep(2)
+                            continue
+                        else:
+                            results.append(f"[set_msg_emoji_like] 执行异常: {e}")
+                            logger.error(f"[EMOJI ERROR] message={msg_id} emoji={emoji_id} error={e}")
             else:
                 results.append(f"[{tc.function_name}] 未知的工具调用")
         return results
