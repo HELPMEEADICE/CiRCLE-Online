@@ -25,21 +25,31 @@ class NapCatConnection:
     async def send_action(self, action: str, params: dict = None, echo: str = None,
                           timeout: float = 10.0) -> dict:
         payload = {"action": action, "params": params or {}}
+        future: Optional[asyncio.Future] = None
         if echo:
             payload["echo"] = echo
         elif timeout > 0:
             echo = str(uuid.uuid4())
             payload["echo"] = echo
 
+        if echo and timeout > 0:
+            future = asyncio.get_running_loop().create_future()
+            self._pending_echoes[echo] = future
+
         # 兼容FastAPI WebSocket和原生websockets
-        if hasattr(self.websocket, 'send_json'):
-            await self.websocket.send_json(payload)
-        else:
-            await self.websocket.send(json.dumps(payload))
+        try:
+            if hasattr(self.websocket, 'send_json'):
+                await self.websocket.send_json(payload)
+            else:
+                await self.websocket.send(json.dumps(payload))
+        except Exception:
+            if echo and timeout > 0:
+                self._pending_echoes.pop(echo, None)
+                if future and not future.done():
+                    future.cancel()
+            raise
 
         if echo and timeout > 0:
-            future: asyncio.Future = asyncio.get_running_loop().create_future()
-            self._pending_echoes[echo] = future
             try:
                 return await asyncio.wait_for(future, timeout=timeout)
             except asyncio.TimeoutError:

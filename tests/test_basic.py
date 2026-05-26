@@ -52,5 +52,27 @@ def test_group_context_keeps_only_own_replies_as_assistant():
     assert "[Poppin'Party成员] 市谷有咲" in context[1].content
 
 
+@pytest.mark.asyncio
+async def test_send_action_registers_echo_before_send():
+    from backend.websocket_server import NapCatConnection
+
+    conn = None
+
+    class FastReplyWebSocket:
+        async def send_json(self, payload):
+            echo = payload["echo"]
+            assert echo in conn._pending_echoes
+            conn.resolve_echo(echo, {"status": "ok", "retcode": 0})
+
+    conn = NapCatConnection(8081, FastReplyWebSocket())
+
+    resp = await conn.send_action("set_msg_emoji_like", {
+        "message_id": 620770633,
+        "emoji_id": "128053",
+    })
+
+    assert resp == {"status": "ok", "retcode": 0}
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
