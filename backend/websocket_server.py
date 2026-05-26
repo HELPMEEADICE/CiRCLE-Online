@@ -209,6 +209,16 @@ class MultiPortWebSocketServer:
                 if target_conn and self_id:
                     target_conn.qq_id = self_id
                     logger.info(f"Port {port} identified as QQ {self_id}")
+
+                    try:
+                        login_info = await target_conn.send_action("get_login_info", timeout=5.0)
+                        if login_info and login_info.get("status") == "ok":
+                            data = login_info.get("data", {})
+                            target_conn.qq_name = data.get("nickname", "")
+                            logger.info(f"Port {port} QQ name: {target_conn.qq_name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to get login info for port {port}: {e}")
+
                     if self._status_callback:
                         await self._status_callback("identified", port, self_id)
 

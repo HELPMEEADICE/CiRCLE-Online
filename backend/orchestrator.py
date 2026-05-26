@@ -8,7 +8,7 @@ from backend.llm_client import llm_client, RoleplayResponse
 from backend.models import ChatMessage, CharacterAssignment
 from backend.config import config, load_port_assignments, save_port_assignments
 from backend.token_counter import count_message_tokens, count_single_message_tokens, truncate_messages_to_token_budget
-from backend.utils import get_logger, parse_message_text, build_text_message, extract_image_urls
+from backend.utils import get_logger, parse_message_text, build_text_message, extract_image_urls, resolve_at_mentions
 from backend.database import db
 
 logger = get_logger("orchestrator")
@@ -492,11 +492,24 @@ class Orchestrator:
                 return
             sender_name = bot_character
 
+        character_names = list(self._assignments.values())
+        qq_name_map = {}
+        if self._ws_server:
+            for p, conn in self._ws_server.connections.items():
+                if conn and conn.qq_name:
+                    char = self._assignments.get(p)
+                    if char:
+                        qq_name_map[conn.qq_name] = char
+
+        should_reply = self._should_reply(raw_message, character_name, qq_name_map)
+
+        processed_message = resolve_at_mentions(raw_message, character_names, self._bot_qq_map, qq_name_map)
+
         session = await self._get_group_session(group_id)
 
-        display_content = f"[{sender_name}]: {raw_message}"
+        display_content = f"[{sender_name}]: {processed_message}"
         if is_bot:
-            display_content = f"[Poppin'Party成员] {sender_name}: {raw_message}"
+            display_content = f"[Poppin'Party成员] {sender_name}: {processed_message}"
         if vision_text:
             display_content = f"{display_content} [图片内容: {vision_text}]"
         display_content = f"{display_content} [message_id={message_id}]"
@@ -504,7 +517,7 @@ class Orchestrator:
         await session.add(ChatMessage(
             role="user",
             content=display_content,
-            raw_content=raw_message,
+            raw_content=processed_message,
             vision_content=vision_text or None,
             qq_id=user_id,
             character=character_name,
@@ -512,7 +525,6 @@ class Orchestrator:
             sender_name=sender_name,
         ))
 
-        should_reply = self._should_reply(raw_message, character_name)
         if not should_reply:
             return
 
@@ -531,7 +543,7 @@ class Orchestrator:
         response = await llm_client.generate_roleplay_response(
             character_prompt=system_prompt,
             context=context,
-            user_message=raw_message,
+            user_message=processed_message,
             character_name=character_name,
             tools=_BAN_TOOL + _EMOJI_TOOL,
         )
@@ -630,9 +642,18 @@ class Orchestrator:
 
             await self._send_private_reply(port, user_id, response.content)
 
-    def _should_reply(self, message: str, character_name: str) -> bool:
+    def _should_reply(self, message: str, character_name: str, qq_name_map: dict[str, str] = None) -> bool:
         if f"@{character_name}" in message:
             return True
+
+        for qq_id, char_name in self._bot_qq_map.items():
+            if char_name == character_name and f"@{qq_id}" in message:
+                return True
+
+        if qq_name_map:
+            for qq_name, char_name in qq_name_map.items():
+                if char_name == character_name and qq_name and f"@{qq_name}" in message:
+                    return True
 
         keywords = [character_name, character_name.replace(" ", "")]
         for kw in keywords:

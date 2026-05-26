@@ -1,4 +1,5 @@
 import logging
+import re
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -71,6 +72,35 @@ def extract_image_urls(message_segments: list[dict]) -> list[str]:
             if url:
                 urls.append(url)
     return urls
+
+
+def resolve_at_mentions(raw_message: str, character_names: list[str], bot_qq_map: dict[str, str], qq_name_map: dict[str, str] = None) -> str:
+    """Convert @mentions to [对X说] format to prevent LLM confusing who is speaking.
+
+    - @character_name followed by delimiters → [对character_name说]
+    - @qq_number followed by delimiters → [对character_name说] (if in bot_qq_map)
+    - @qq_nickname followed by delimiters → [对character_name说] (if in qq_name_map)
+    """
+    result = raw_message
+
+    for char_name in character_names:
+        pattern = f"@{re.escape(char_name)}(?=[：:，,。.！!？? \\t\\n]|$)"
+        replacement = f"[对{char_name}说]"
+        result = re.sub(pattern, replacement, result)
+
+    for qq_id, char_name in bot_qq_map.items():
+        pattern = f"@{re.escape(qq_id)}(?=[：:，,。.！!？? \\t\\n]|$)"
+        replacement = f"[对{char_name}说]"
+        result = re.sub(pattern, replacement, result)
+
+    if qq_name_map:
+        for qq_name, char_name in qq_name_map.items():
+            if qq_name and qq_name != char_name:
+                pattern = f"@{re.escape(qq_name)}(?=[：:，,。.！!？? \\t\\n]|$)"
+                replacement = f"[对{char_name}说]"
+                result = re.sub(pattern, replacement, result)
+
+    return result
 
 
 def build_text_message(text: str) -> list[dict]:
