@@ -134,7 +134,7 @@ class MultiPortWebSocketServer:
         path = str(websocket.url.path) if websocket.url else "/"
         headers = websocket.headers
 
-        query_string = urllib.parse.urlparse(path).query if path else ""
+        query_string = str(websocket.url.query_string) if websocket.url else ""
         query_params = urllib.parse.parse_qs(query_string)
         token_from_query = query_params.get("access_token", [None])[0]
 
