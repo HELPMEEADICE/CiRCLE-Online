@@ -327,6 +327,34 @@ _BAN_TOOL = [{
     },
 }]
 
+_EMOJI_TOOL = [{
+    "type": "function",
+    "function": {
+        "name": "set_msg_emoji_like",
+        "description": (
+            "给指定消息添加QQ表情回应。当你对某条消息有强烈的情感反应时使用——"
+            "觉得消息很下头用🐛(128027)，很无语用🐵(128053)，很喜欢用🐳(128051)。"
+            "不要对每条消息都用，只在情感强烈时才使用。"
+            "可用表情ID：128027(🐛下头)、128053(🐵无语)、128051(🐳喜欢)"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message_id": {
+                    "type": "integer",
+                    "description": "要回应的消息ID",
+                },
+                "emoji_id": {
+                    "type": "string",
+                    "description": "表情ID：128027(🐛下头)、128053(🐵无语)、128051(🐳喜欢)",
+                    "enum": ["128027", "128053", "128051"],
+                },
+            },
+            "required": ["message_id", "emoji_id"],
+        },
+    },
+}]
+
 
 class Orchestrator:
     def __init__(self):
@@ -433,6 +461,7 @@ class Orchestrator:
 
         group_id = str(data.get("group_id", ""))
         user_id = str(data.get("user_id", ""))
+        message_id = data.get("message_id", 0)
         message_segments = data.get("message", [])
         raw_message = data.get("raw_message", "")
 
@@ -470,6 +499,7 @@ class Orchestrator:
             display_content = f"[Poppin'Party成员] {sender_name}: {raw_message}"
         if vision_text:
             display_content = f"{display_content} [图片内容: {vision_text}]"
+        display_content = f"{display_content} [message_id={message_id}]"
 
         await session.add(ChatMessage(
             role="user",
@@ -503,7 +533,7 @@ class Orchestrator:
             context=context,
             user_message=raw_message,
             character_name=character_name,
-            tools=_BAN_TOOL,
+            tools=_BAN_TOOL + _EMOJI_TOOL,
         )
 
         if response:
@@ -513,7 +543,9 @@ class Orchestrator:
 
             reply_text = response.content
             if tool_results and not reply_text:
-                reply_text = tool_results[0]
+                non_emoji_results = [r for r in tool_results if not r.startswith("[set_msg_emoji_like]")]
+                if non_emoji_results:
+                    reply_text = non_emoji_results[0]
 
             if reply_text:
                 await session.add(ChatMessage(
@@ -640,6 +672,34 @@ class Orchestrator:
                 except Exception as e:
                     results.append(f"[set_group_ban] 执行异常: {e}")
                     logger.error(f"[BAN ERROR] {e}")
+            elif tc.function_name == "set_msg_emoji_like":
+                msg_id = tc.arguments.get("message_id", 0)
+                emoji_id = tc.arguments.get("emoji_id", "")
+                if not msg_id or not emoji_id:
+                    results.append(f"[set_msg_emoji_like] 缺少参数")
+                    continue
+                conn = self._ws_server.get_connection(port) if self._ws_server else None
+                if not conn:
+                    results.append(f"[set_msg_emoji_like] 无法连接到端口{port}")
+                    continue
+                try:
+                    resp = await conn.send_action("set_msg_emoji_like", {
+                        "message_id": msg_id,
+                        "emoji_id": emoji_id,
+                    })
+                    status = resp.get("status", "unknown")
+                    retcode = resp.get("retcode", -1)
+                    if status == "ok" and retcode == 0:
+                        emoji_names = {"128027": "🐛", "128053": "🐵", "128051": "🐳"}
+                        emoji_display = emoji_names.get(emoji_id, emoji_id)
+                        results.append(f"[set_msg_emoji_like] 已添加表情回应 {emoji_display}")
+                        logger.info(f"[EMOJI] message={msg_id} emoji={emoji_id}")
+                    else:
+                        results.append(f"[set_msg_emoji_like] 失败: {resp.get('message', '未知错误')}")
+                        logger.error(f"[EMOJI FAILED] {resp}")
+                except Exception as e:
+                    results.append(f"[set_msg_emoji_like] 执行异常: {e}")
+                    logger.error(f"[EMOJI ERROR] {e}")
             else:
                 results.append(f"[{tc.function_name}] 未知的工具调用")
         return results
