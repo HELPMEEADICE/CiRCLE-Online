@@ -71,6 +71,9 @@ async def lifespan(app: FastAPI):
 
     orchestrator.set_ws_server(ws_server)
 
+    # Start WebSocket servers for each port
+    await ws_server.start_servers()
+
     logger.info("CiRCLE Online started")
     logger.info(f"WebSocket ports: {config.server.base_port}-{config.server.base_port + config.server.num_ports - 1}")
 

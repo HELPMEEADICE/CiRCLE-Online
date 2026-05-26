@@ -6,6 +6,8 @@ from fastapi import WebSocket, WebSocketDisconnect
 from backend.models import ConnectionStatus, PortInfo
 from backend.utils import get_logger
 import urllib.parse
+import websockets
+from websockets.asyncio.server import ServerConnection
 
 logger = get_logger("websocket_server")
 
@@ -29,7 +31,11 @@ class NapCatConnection:
             echo = str(uuid.uuid4())
             payload["echo"] = echo
 
-        await self.websocket.send_json(payload)
+        # 兼容FastAPI WebSocket和原生websockets
+        if hasattr(self.websocket, 'send_json'):
+            await self.websocket.send_json(payload)
+        else:
+            await self.websocket.send(json.dumps(payload))
 
         if echo and timeout > 0:
             future: asyncio.Future = asyncio.get_running_loop().create_future()
@@ -80,6 +86,7 @@ class MultiPortWebSocketServer:
         self.event_handlers: list[Callable] = []
         self._status_callback: Optional[Callable] = None
         self._port_configs: dict[int, dict] = {}
+        self._servers: list[websockets.asyncio.server.Server] = []
 
         for i in range(num_ports):
             port = base_port + i
@@ -238,5 +245,97 @@ class MultiPortWebSocketServer:
     def get_connection(self, port: int) -> Optional[NapCatConnection]:
         return self.connections.get(port)
 
+    async def start_servers(self):
+        """为每个端口启动独立的WebSocket服务器"""
+        for i in range(self.num_ports):
+            port = self.base_port + i
+            try:
+                server = await websockets.serve(
+                    lambda ws, p=port: self._handle_ws_connection(p, ws),
+                    self.host,
+                    port
+                )
+                self._servers.append(server)
+                logger.info(f"WebSocket server started on port {port}")
+            except Exception as e:
+                logger.error(f"Failed to start WebSocket server on port {port}: {e}")
+
+    async def _handle_ws_connection(self, port: int, websocket: ServerConnection):
+        """处理单个端口的WebSocket连接"""
+        from datetime import datetime
+
+        # 获取远程地址（安全处理）
+        remote = websocket.remote_address
+        client_addr = f"{remote[0]}:{remote[1]}" if remote else "unknown"
+        logger.info(f"New connection on port {port} from {client_addr}")
+
+        # 验证token（从查询参数或header获取）
+        if not await self._validate_token_ws(port, websocket):
+            logger.warning(f"Token validation failed for port {port} from {client_addr}")
+            await websocket.close(4001, "Unauthorized")
+            return
+
+        await self._close_old_connection(port)
+
+        conn = NapCatConnection(port, websocket)
+        self.connections[port] = conn
+        conn.connected_at = datetime.now()
+
+        if self._status_callback:
+            await self._status_callback("connected", port)
+
+        try:
+            async for message in websocket:
+                try:
+                    data = json.loads(message)
+                    conn.last_message_at = datetime.now()
+                    await self._process_event(port, data, conn)
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON received on port {port}")
+        except websockets.exceptions.ConnectionClosed as e:
+            logger.info(f"Client disconnected from port {port}: {e.code} {e.reason}")
+        except Exception as e:
+            logger.error(f"Error on port {port}: {e}")
+        finally:
+            if self.connections.get(port) is conn:
+                self.connections[port] = None
+            if self._status_callback:
+                await self._status_callback("disconnected", port)
+
+    async def _validate_token_ws(self, port: int, websocket: ServerConnection) -> bool:
+        """验证WebSocket连接的token"""
+        port_config = self._port_configs.get(port, {})
+        required_token = port_config.get("token", "")
+        if not required_token:
+            return True
+
+        # 从查询参数获取token
+        path = websocket.request.path if websocket.request else "/"
+        query = websocket.request.headers.get("Query-String", "") if websocket.request else ""
+        
+        # 解析查询参数
+        import urllib.parse as urlparse
+        query_params = urlparse.parse_qs(query)
+        token_from_query = query_params.get("access_token", [None])[0]
+
+        # 从header获取token
+        token_from_header = None
+        auth_header = websocket.request.headers.get("Authorization", "") if websocket.request else ""
+        if auth_header.startswith("Bearer "):
+            token_from_header = auth_header[7:]
+
+        if token_from_query == required_token or token_from_header == required_token:
+            return True
+
+        logger.warning(f"Token validation failed for port {port}")
+        return False
+
     async def stop_servers(self):
-        pass
+        """关闭所有WebSocket服务器"""
+        for server in self._servers:
+            try:
+                server.close()
+                await server.wait_closed()
+            except Exception as e:
+                logger.error(f"Error closing server: {e}")
+        self._servers.clear()
