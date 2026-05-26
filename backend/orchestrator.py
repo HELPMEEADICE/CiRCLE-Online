@@ -28,24 +28,20 @@ class SessionMemory:
         self.messages.append(message)
         self._total_tokens += msg_tokens
 
-        # Hard cap on message count
         if len(self.messages) > self.max_messages:
             removed = self.messages[:-self.max_messages]
             self.messages = self.messages[-self.max_messages:]
             self._total_tokens = count_message_tokens(self.messages)
 
-        # If tokens exceed budget and not already compressing, schedule compression
         if self._total_tokens > self.max_tokens and not self._compressing:
             self._compressing = True
             try:
                 loop = asyncio.get_running_loop()
                 loop.create_task(self._compress())
             except RuntimeError:
-                # No running loop — sync fallback: just truncate
                 self._truncate_sync()
 
     async def _compress(self):
-        """Compress old messages using the auxiliary model, keeping recent ones intact."""
         compression_cfg = config.orchestrator.context_compression
         reserve = compression_cfg.reserve_recent
 
@@ -53,7 +49,6 @@ class SessionMemory:
             self._compressing = False
             return
 
-        # Split into old (to compress) and recent (to keep)
         old_messages = self.messages[:-reserve]
         recent_messages = self.messages[-reserve:]
 
@@ -77,13 +72,11 @@ class SessionMemory:
                 f"total tokens now {self._total_tokens}"
             )
         else:
-            # Compression failed — fall back to simple truncation
             self._truncate_sync()
 
         self._compressing = False
 
     def _truncate_sync(self):
-        """Sync fallback: keep messages within token budget by dropping oldest."""
         self.messages = truncate_messages_to_token_budget(self.messages, self.max_tokens)
         self._total_tokens = count_message_tokens(self.messages)
         logger.warning(f"Context truncated to {len(self.messages)} msgs, {self._total_tokens} tokens")
@@ -115,8 +108,7 @@ class Orchestrator:
         )
         self._ws_server = None
         self._load_assignments()
-        
-        # Auto dialogue tracking
+
         self._chain_counters: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
         self._last_ai_reply_time: dict[str, dict[str, datetime]] = defaultdict(lambda: defaultdict(datetime.min))
         self._last_initiation_time: dict[str, datetime] = defaultdict(lambda: datetime.min)
@@ -127,7 +119,7 @@ class Orchestrator:
         for port, info in port_configs.items():
             char_name = info.get("character", "")
             if char_name:
-                self._assignments[port] = char_name
+                self._assignments[int(port)] = char_name
                 logger.info(f"Port {port} assigned to character: {char_name}")
 
     def set_ws_server(self, ws_server):
@@ -159,9 +151,8 @@ class Orchestrator:
     def _save_assignments(self):
         port_configs = load_port_assignments()
         for port, char_name in self._assignments.items():
-            port_str = str(port)
-            if port_str not in port_configs:
-                port_configs[port] = {"name": f"Slot {port - 8080}", "character": char_name}
+            if port not in port_configs:
+                port_configs[port] = {"name": f"Slot {port - 8080}", "character": char_name, "token": ""}
             else:
                 port_configs[port]["character"] = char_name
         save_port_assignments(port_configs)
@@ -226,10 +217,10 @@ class Orchestrator:
             ))
 
             await self._send_reply(port, group_id, response)
-            
-            # Trigger other AI characters to consider replying
+
             if config.orchestrator.auto_dialogue.enabled:
-                await self.handle_ai_reply(port, group_id, character_name, response)
+                self._chain_counters[group_id][character_name] = 0
+                await self.handle_ai_reply(port, group_id, character_name, response, depth=0)
 
     async def handle_private_message(self, port: int, data: dict):
         if not self._enabled:
@@ -290,57 +281,52 @@ class Orchestrator:
 
         return random.random() < config.orchestrator.group_reply_probability
 
-    async def handle_ai_reply(self, port: int, group_id: str, responding_character: str, reply_text: str):
-        """Trigger other AI characters to consider replying after an AI responds."""
+    def _find_port_for_character(self, character_name: str) -> Optional[int]:
+        for p, c in self._assignments.items():
+            if c == character_name:
+                return p
+        return None
+
+    async def handle_ai_reply(self, port: int, group_id: str, responding_character: str,
+                              reply_text: str, depth: int = 0):
         if not config.orchestrator.auto_dialogue.enabled:
             return
 
-        now = datetime.now()
         auto_config = config.orchestrator.auto_dialogue
-        
-        # Check cooldown
+
+        if depth >= auto_config.chain_length:
+            return
+
+        now = datetime.now()
         last_reply_time = self._last_ai_reply_time[group_id][responding_character]
         if (now - last_reply_time).total_seconds() * 1000 < auto_config.cooldown_ms:
             return
-        
-        # Update last reply time
+
         self._last_ai_reply_time[group_id][responding_character] = now
-        
-        # Get all assigned characters in this group
+
         assigned_chars = list(self._assignments.values())
-        
-        # Trigger other characters
+
         for char_name in assigned_chars:
             if char_name == responding_character:
                 continue
-            
-            # Check chain length limit
-            chain_key = f"{group_id}_{char_name}"
+
             if self._chain_counters[group_id][char_name] >= auto_config.chain_length:
                 continue
-            
-            # Check trigger probability
+
             if random.random() > auto_config.trigger_probability:
                 continue
-            
-            # Find port for this character
-            char_port = None
-            for p, c in self._assignments.items():
-                if c == char_name:
-                    char_port = p
-                    break
-            
+
+            char_port = self._find_port_for_character(char_name)
             if not char_port:
                 continue
-            
-            # Generate and send reply
+
             await asyncio.sleep(config.orchestrator.reply_delay_ms / 1000)
-            
+
             session = self._group_sessions[group_id][char_name]
             system_prompt = character_manager.get_system_prompt(char_name)
             if not system_prompt:
                 continue
-            
+
             context = session.get_context()
             response = await llm_client.generate_roleplay_response(
                 character_prompt=system_prompt,
@@ -348,125 +334,100 @@ class Orchestrator:
                 user_message=reply_text,
                 character_name=char_name,
             )
-            
+
             if response:
-                # Update chain counter
                 self._chain_counters[group_id][char_name] += 1
-                
-                # Add to session
+
                 session.add(ChatMessage(
                     role="assistant",
                     content=response,
                     character=char_name,
                 ))
-                
-                # Send reply
+
                 await self._send_reply(char_port, group_id, response)
-                
-                # Recursively trigger other AIs
-                await self.handle_ai_reply(char_port, group_id, char_name, response)
+
+                await self.handle_ai_reply(char_port, group_id, char_name, response, depth=depth + 1)
 
     def _should_initiate_dialogue(self, group_id: str) -> bool:
-        """Check if an AI should initiate a dialogue in the group."""
         if not config.orchestrator.auto_dialogue.enabled:
             return False
-        
+
         now = datetime.now()
         auto_config = config.orchestrator.auto_dialogue
-        
-        # Check initiation interval
+
         last_init_time = self._last_initiation_time[group_id]
         if (now - last_init_time).total_seconds() * 1000 < auto_config.initiation_interval_ms:
             return False
-        
-        # Check initiation probability
+
         return random.random() < auto_config.initiation_probability
 
     async def _initiate_auto_dialogue(self, group_id: str):
-        """Have an AI initiate a dialogue in the group."""
         if not self._should_initiate_dialogue(group_id):
             return
-        
-        # Select a random character to initiate
+
         assigned_chars = list(self._assignments.values())
         if not assigned_chars:
             return
-        
+
         initiating_char = random.choice(assigned_chars)
-        
-        # Find port for this character
-        char_port = None
-        for p, c in self._assignments.items():
-            if c == initiating_char:
-                char_port = p
-                break
-        
+
+        char_port = self._find_port_for_character(initiating_char)
         if not char_port:
             return
-        
-        # Generate initiation message
+
         session = self._group_sessions[group_id][initiating_char]
         system_prompt = character_manager.get_system_prompt(initiating_char)
         if not system_prompt:
             return
-        
-        # Create a context-aware initiation prompt
+
         context = session.get_context()
         initiation_prompt = f"请以{initiating_char}的身份，根据当前对话上下文，主动发起一个新的对话话题或回应之前的对话。保持角色性格特点，回复要自然、简洁。"
-        
+
         response = await llm_client.generate_roleplay_response(
             character_prompt=system_prompt,
             context=context,
             user_message=initiation_prompt,
             character_name=initiating_char,
         )
-        
+
         if response:
-            # Update initiation time
             self._last_initiation_time[group_id] = datetime.now()
-            
-            # Add to session
+
             session.add(ChatMessage(
                 role="assistant",
                 content=response,
                 character=initiating_char,
             ))
-            
-            # Send reply
+
             await self._send_reply(char_port, group_id, response)
-            
-            # Trigger other AIs
-            await self.handle_ai_reply(char_port, group_id, initiating_char, response)
+
+            self._chain_counters[group_id][initiating_char] = 0
+            await self.handle_ai_reply(char_port, group_id, initiating_char, response, depth=0)
 
     def reset_chain_counters(self, group_id: str = None):
-        """Reset chain counters for a group or all groups."""
         if group_id:
             self._chain_counters[group_id].clear()
         else:
             self._chain_counters.clear()
 
     async def start_initiation_task(self):
-        """Start the periodic task for AI-initiated dialogues."""
         if not config.orchestrator.auto_dialogue.enabled:
             return
-        
+
         async def _initiation_loop():
             while True:
                 try:
-                    # Get all groups from sessions
                     for group_id in list(self._group_sessions.keys()):
                         await self._initiate_auto_dialogue(group_id)
                 except Exception as e:
                     logger.error(f"Error in initiation loop: {e}")
-                
-                # Wait before next check
-                await asyncio.sleep(60)  # Check every minute
-        
+
+                await asyncio.sleep(60)
+
         self._initiation_task = asyncio.create_task(_initiation_loop())
         logger.info("Auto dialogue initiation task started")
 
     async def stop_initiation_task(self):
-        """Stop the periodic initiation task."""
         if self._initiation_task:
             self._initiation_task.cancel()
             try:

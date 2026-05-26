@@ -1,8 +1,9 @@
 import asyncio
 import json
+import uuid
 from typing import Optional, Callable, Any
 from fastapi import WebSocket, WebSocketDisconnect
-from backend.models import ConnectionStatus, PortInfo, OneBotEvent, LifecycleEvent, MessageEvent
+from backend.models import ConnectionStatus, PortInfo
 from backend.utils import get_logger
 import urllib.parse
 import websockets.exceptions
@@ -18,15 +19,43 @@ class NapCatConnection:
         self.qq_name: Optional[str] = None
         self.connected_at = None
         self.last_message_at = None
+        self._pending_echoes: dict[str, asyncio.Future] = {}
 
-    async def send_action(self, action: str, params: dict = None, echo: str = None) -> dict:
+    async def send_action(self, action: str, params: dict = None, echo: str = None,
+                          timeout: float = 10.0) -> dict:
         payload = {"action": action, "params": params or {}}
         if echo:
             payload["echo"] = echo
+        elif timeout > 0:
+            echo = str(uuid.uuid4())
+            payload["echo"] = echo
+
         await self.websocket.send_json(payload)
+
+        if echo and timeout > 0:
+            future: asyncio.Future = asyncio.get_running_loop().create_future()
+            self._pending_echoes[echo] = future
+            try:
+                return await asyncio.wait_for(future, timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.warning(f"Action '{action}' echo '{echo}' timed out on port {self.port}")
+                return {"status": "error", "retcode": -1, "message": "timeout"}
+            finally:
+                self._pending_echoes.pop(echo, None)
+
         return payload
 
-    async def send_message(self, group_id: str = None, user_id: str = None, message: list = None):
+    def resolve_echo(self, echo: str, data: dict) -> bool:
+        future = self._pending_echoes.pop(echo, None)
+        if future and not future.done():
+            future.set_result(data)
+            return True
+        return False
+
+    async def send_message(self, group_id: str = None, user_id: str = None,
+                           message: list = None):
+        if not group_id and not user_id:
+            raise ValueError("Either group_id or user_id must be provided")
         params = {"message": message or []}
         if group_id:
             params["group_id"] = group_id
@@ -59,7 +88,6 @@ class MultiPortWebSocketServer:
             self.connections[port] = None
 
     def set_port_configs(self, port_configs: dict[int, dict]):
-        """Set port configurations for token validation."""
         self._port_configs = port_configs
 
     def set_status_callback(self, callback: Callable):
@@ -100,14 +128,12 @@ class MultiPortWebSocketServer:
         return result
 
     async def start_servers(self):
-        """Start WebSocket servers on all configured ports."""
         import websockets
         import logging
-        
-        # Create a logger for websockets that suppresses handshake errors
+
         ws_logger = logging.getLogger("websockets.server")
         ws_logger.setLevel(logging.CRITICAL)
-        
+
         for i in range(self.num_ports):
             port = self.base_port + i
             try:
@@ -124,59 +150,65 @@ class MultiPortWebSocketServer:
                 logger.error(f"Failed to start WebSocket server on port {port}: {e}")
 
     async def _process_request(self, path, request_headers):
-        """Process request before WebSocket handshake."""
-        # Check if this is a WebSocket upgrade request
         if "Upgrade" not in request_headers or request_headers["Upgrade"].lower() != "websocket":
-            # Not a WebSocket request, return HTTP response
             return "HTTP/1.1 426 Upgrade Required\r\n\r\n", None
         return None
 
+    async def _validate_token(self, port: int, websocket) -> bool:
+        port_config = self._port_configs.get(port, {})
+        required_token = port_config.get("token", "")
+        if not required_token:
+            return True
+
+        path = websocket.request.path if hasattr(websocket, 'request') else "/"
+        query_string = urllib.parse.urlparse(path).query if path else ""
+        query_params = urllib.parse.parse_qs(query_string)
+        token_from_query = query_params.get("access_token", [None])[0]
+
+        token_from_header = None
+        if hasattr(websocket, 'request') and hasattr(websocket.request, 'headers'):
+            auth_header = websocket.request.headers.get("Authorization", "")
+            if auth_header.startswith("Bearer "):
+                token_from_header = auth_header[7:]
+
+        if token_from_query == required_token or token_from_header == required_token:
+            return True
+
+        logger.warning(f"Token validation failed for port {port}")
+        return False
+
+    async def _close_old_connection(self, port: int):
+        old_conn = self.connections.get(port)
+        if old_conn:
+            logger.info(f"Closing existing connection on port {port}")
+            await old_conn.close()
+            self.connections[port] = None
+
     async def _handle_ws_connection(self, port: int, websocket):
-        """Handle a WebSocket connection from the websockets library."""
         from datetime import datetime
-        
+
         try:
-            # Check token if configured
-            port_config = self._port_configs.get(port, {})
-            required_token = port_config.get("token", "")
-            
-            if required_token:
-                # Extract token from query parameters or headers
-                path = websocket.request.path if hasattr(websocket, 'request') else "/"
-                query_string = urllib.parse.urlparse(path).query if path else ""
-                query_params = urllib.parse.parse_qs(query_string)
-                
-                # Check query parameter 'access_token'
-                token_from_query = query_params.get("access_token", [None])[0]
-                
-                # Check headers (websockets library provides request headers)
-                token_from_header = None
-                if hasattr(websocket, 'request') and hasattr(websocket.request, 'headers'):
-                    auth_header = websocket.request.headers.get("Authorization", "")
-                    if auth_header.startswith("Bearer "):
-                        token_from_header = auth_header[7:]
-                
-                # Validate token
-                if token_from_query != required_token and token_from_header != required_token:
-                    logger.warning(f"Token validation failed for port {port}")
-                    await websocket.close(code=4001, reason="Unauthorized")
-                    return
-            
+            if not await self._validate_token(port, websocket):
+                await websocket.close(code=4001, reason="Unauthorized")
+                return
+
+            await self._close_old_connection(port)
+
             conn = NapCatConnection(port, websocket)
             self.connections[port] = conn
             conn.connected_at = datetime.now()
-            
+
             logger.info(f"New connection on port {port}")
-            
+
             if self._status_callback:
                 await self._status_callback("connected", port)
-            
+
             try:
                 async for message in websocket:
                     try:
                         data = json.loads(message)
                         conn.last_message_at = datetime.now()
-                        await self._process_event(port, data)
+                        await self._process_event(port, data, conn)
                     except json.JSONDecodeError:
                         logger.error(f"Invalid JSON received on port {port}")
                     except Exception as e:
@@ -186,23 +218,28 @@ class MultiPortWebSocketServer:
             except Exception as e:
                 logger.error(f"Error on port {port}: {e}")
             finally:
-                self.connections[port] = None
+                if self.connections.get(port) is conn:
+                    self.connections[port] = None
                 if self._status_callback:
                     await self._status_callback("disconnected", port)
-                    
+
         except websockets.exceptions.InvalidMessage:
-            # Ignore invalid HTTP requests (e.g., TCPing, port scanning)
             logger.debug(f"Invalid HTTP request on port {port} (likely non-WebSocket connection)")
         except Exception as e:
             logger.error(f"Unexpected error on port {port}: {e}")
 
     async def handle_connection(self, port: int, websocket: WebSocket):
-        """Handle a FastAPI WebSocket connection (for backward compatibility)."""
+        from datetime import datetime
+
+        if not await self._validate_token(port, websocket):
+            await websocket.close(code=4001, reason="Unauthorized")
+            return
+
         await websocket.accept()
+        await self._close_old_connection(port)
+
         conn = NapCatConnection(port, websocket)
         self.connections[port] = conn
-
-        from datetime import datetime
         conn.connected_at = datetime.now()
 
         logger.info(f"New connection on port {port}")
@@ -214,29 +251,35 @@ class MultiPortWebSocketServer:
             while True:
                 data = await websocket.receive_json()
                 conn.last_message_at = datetime.now()
-                await self._process_event(port, data)
+                await self._process_event(port, data, conn)
         except WebSocketDisconnect:
             logger.info(f"Client disconnected from port {port}")
         except Exception as e:
             logger.error(f"Error on port {port}: {e}")
         finally:
-            self.connections[port] = None
+            if self.connections.get(port) is conn:
+                self.connections[port] = None
             if self._status_callback:
                 await self._status_callback("disconnected", port)
 
-    async def _process_event(self, port: int, data: dict):
+    async def _process_event(self, port: int, data: dict, conn: NapCatConnection = None):
         post_type = data.get("post_type", "")
 
         if post_type == "meta_event":
-            sub_type = data.get("meta_event_type", "")
-            if sub_type == "lifecycle":
+            sub_type = data.get("sub_type", "")
+            if sub_type == "connect":
                 self_id = str(data.get("self_id", ""))
-                conn = self.connections.get(port)
-                if conn and self_id:
-                    conn.qq_id = self_id
+                target_conn = conn or self.connections.get(port)
+                if target_conn and self_id:
+                    target_conn.qq_id = self_id
                     logger.info(f"Port {port} identified as QQ {self_id}")
                     if self._status_callback:
                         await self._status_callback("identified", port, self_id)
+
+        if data.get("echo"):
+            target_conn = conn or self.connections.get(port)
+            if target_conn and target_conn.resolve_echo(data["echo"], data):
+                return
 
         for handler in self.event_handlers:
             try:
@@ -244,18 +287,19 @@ class MultiPortWebSocketServer:
             except Exception as e:
                 logger.error(f"Event handler error: {e}")
 
-    async def send_to_port(self, port: int, action: str, params: dict = None) -> Optional[dict]:
+    async def send_to_port(self, port: int, action: str, params: dict = None,
+                           timeout: float = 10.0) -> Optional[dict]:
         conn = self.connections.get(port)
         if not conn:
             logger.warning(f"No connection on port {port}")
             return None
-        return await conn.send_action(action, params)
+        return await conn.send_action(action, params, timeout=timeout)
 
     async def broadcast(self, action: str, params: dict = None):
         for port, conn in self.connections.items():
             if conn:
                 try:
-                    await conn.send_action(action, params)
+                    await conn.send_action(action, params, timeout=0)
                 except Exception as e:
                     logger.error(f"Broadcast error on port {port}: {e}")
 
@@ -266,7 +310,6 @@ class MultiPortWebSocketServer:
         return self.connections.get(port)
 
     async def stop_servers(self):
-        """Stop all WebSocket servers."""
         for port, server in self._servers.items():
             try:
                 server.close()

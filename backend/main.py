@@ -215,6 +215,12 @@ async def reload_characters():
     return {"success": True, "count": len(character_manager.get_all_characters())}
 
 
+def _mask_api_key(key: str) -> str:
+    if not key or len(key) <= 8:
+        return "****" if key else ""
+    return key[:4] + "****" + key[-4:]
+
+
 @app.get("/api/config")
 async def get_config():
     cfg = load_config()
@@ -227,7 +233,7 @@ async def get_config():
         },
         "llm": {
             "provider": cfg.llm.provider,
-            "api_key": cfg.llm.api_key,
+            "api_key": _mask_api_key(cfg.llm.api_key),
             "base_url": cfg.llm.base_url,
             "model": cfg.llm.model,
             "assistant_model": cfg.llm.assistant_model,

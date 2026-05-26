@@ -43,17 +43,17 @@ class OneBotResponse(BaseModel):
 
 
 class OneBotEvent(BaseModel):
-    time: int
-    self_id: int
-    post_type: str
+    time: int = 0
+    self_id: str = ""
+    post_type: str = ""
     sub_type: Optional[str] = None
     raw_data: dict[str, Any] = {}
 
 
 class MessageEvent(OneBotEvent):
-    message_id: Optional[int] = None
-    user_id: Optional[int] = None
-    group_id: Optional[int] = None
+    message_id: Optional[str] = None
+    user_id: Optional[str] = None
+    group_id: Optional[str] = None
     message_type: str = ""
     message: list[dict[str, Any]] = []
     raw_message: str = ""
@@ -61,7 +61,7 @@ class MessageEvent(OneBotEvent):
 
 
 class LifecycleEvent(OneBotEvent):
-    sub_type: str = ""
+    pass
 
 
 class ChatMessage(BaseModel):
