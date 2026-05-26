@@ -1,5 +1,4 @@
 import asyncio
-import http
 import json
 import uuid
 from typing import Optional, Callable, Any
@@ -7,8 +6,6 @@ from fastapi import WebSocket, WebSocketDisconnect
 from backend.models import ConnectionStatus, PortInfo
 from backend.utils import get_logger
 import urllib.parse
-import websockets.exceptions
-from websockets.datastructures import Headers
 
 logger = get_logger("websocket_server")
 
@@ -32,10 +29,7 @@ class NapCatConnection:
             echo = str(uuid.uuid4())
             payload["echo"] = echo
 
-        if hasattr(self.websocket, 'send_json'):
-            await self.websocket.send_json(payload)
-        else:
-            await self.websocket.send(json.dumps(payload))
+        await self.websocket.send_json(payload)
 
         if echo and timeout > 0:
             future: asyncio.Future = asyncio.get_running_loop().create_future()
@@ -85,7 +79,6 @@ class MultiPortWebSocketServer:
         self.connections: dict[int, Optional[NapCatConnection]] = {}
         self.event_handlers: list[Callable] = []
         self._status_callback: Optional[Callable] = None
-        self._servers: dict[int, asyncio.Server] = {}
         self._port_configs: dict[int, dict] = {}
 
         for i in range(num_ports):
@@ -132,62 +125,21 @@ class MultiPortWebSocketServer:
             )
         return result
 
-    async def start_servers(self):
-        from websockets.legacy.server import serve
-        import logging
-
-        ws_logger = logging.getLogger("websockets.server")
-        ws_logger.setLevel(logging.CRITICAL)
-
-        for i in range(self.num_ports):
-            port = self.base_port + i
-            try:
-                server = await serve(
-                    lambda ws, p=port: self._handle_ws_connection(p, ws),
-                    self.host,
-                    port,
-                    process_request=self._process_request,
-                    logger=ws_logger
-                )
-                self._servers[port] = server
-                logger.info(f"WebSocket server started on port {port}")
-            except Exception as e:
-                logger.error(f"Failed to start WebSocket server on port {port}: {e}")
-
-    async def _process_request(self, path, request_headers):
-        if "Upgrade" not in request_headers or request_headers["Upgrade"].lower() != "websocket":
-            return (
-                http.HTTPStatus.UPGRADE_REQUIRED,
-                Headers([("Upgrade", "websocket")]),
-                b"Upgrade to WebSocket required.\n",
-            )
-        return None
-
-    async def _validate_token(self, port: int, websocket) -> bool:
+    async def _validate_token(self, port: int, websocket: WebSocket) -> bool:
         port_config = self._port_configs.get(port, {})
         required_token = port_config.get("token", "")
         if not required_token:
             return True
 
-        # Support both FastAPI WebSocket and websockets WebSocketServerProtocol
-        if hasattr(websocket, 'request'):
-            # FastAPI WebSocket
-            path = websocket.request.path if hasattr(websocket.request, 'path') else "/"
-            headers = websocket.request.headers if hasattr(websocket.request, 'headers') else {}
-        elif hasattr(websocket, 'path'):
-            # websockets WebSocketServerProtocol
-            path = websocket.path or "/"
-            headers = websocket.request_headers if hasattr(websocket, 'request_headers') else {}
-        else:
-            path = "/"
-            headers = {}
+        path = str(websocket.url.path) if websocket.url else "/"
+        headers = websocket.headers
 
         query_string = urllib.parse.urlparse(path).query if path else ""
         query_params = urllib.parse.parse_qs(query_string)
         token_from_query = query_params.get("access_token", [None])[0]
 
         token_from_header = None
-        auth_header = headers.get("Authorization", "") if headers else ""
+        auth_header = headers.get("authorization", "") if headers else ""
         if auth_header.startswith("Bearer "):
             token_from_header = auth_header[7:]
 
@@ -204,58 +156,15 @@ class MultiPortWebSocketServer:
             await old_conn.close()
             self.connections[port] = None
 
-    async def _handle_ws_connection(self, port: int, websocket):
-        from datetime import datetime
-
-        try:
-            if not await self._validate_token(port, websocket):
-                await websocket.close(code=4001, reason="Unauthorized")
-                return
-
-            await self._close_old_connection(port)
-
-            conn = NapCatConnection(port, websocket)
-            self.connections[port] = conn
-            conn.connected_at = datetime.now()
-
-            logger.info(f"New connection on port {port}")
-
-            if self._status_callback:
-                await self._status_callback("connected", port)
-
-            try:
-                async for message in websocket:
-                    try:
-                        data = json.loads(message)
-                        conn.last_message_at = datetime.now()
-                        await self._process_event(port, data, conn)
-                    except json.JSONDecodeError:
-                        logger.error(f"Invalid JSON received on port {port}")
-                    except Exception as e:
-                        logger.error(f"Error processing message on port {port}: {e}")
-            except websockets.exceptions.ConnectionClosed:
-                logger.info(f"Client disconnected from port {port}")
-            except Exception as e:
-                logger.error(f"Error on port {port}: {e}")
-            finally:
-                if self.connections.get(port) is conn:
-                    self.connections[port] = None
-                if self._status_callback:
-                    await self._status_callback("disconnected", port)
-
-        except websockets.exceptions.InvalidMessage:
-            logger.debug(f"Invalid HTTP request on port {port} (likely non-WebSocket connection)")
-        except Exception as e:
-            logger.error(f"Unexpected error on port {port}: {e}")
-
     async def handle_connection(self, port: int, websocket: WebSocket):
         from datetime import datetime
+
+        await websocket.accept()
 
         if not await self._validate_token(port, websocket):
             await websocket.close(code=4001, reason="Unauthorized")
             return
 
-        await websocket.accept()
         await self._close_old_connection(port)
 
         conn = NapCatConnection(port, websocket)
@@ -330,11 +239,4 @@ class MultiPortWebSocketServer:
         return self.connections.get(port)
 
     async def stop_servers(self):
-        for port, server in self._servers.items():
-            try:
-                server.close()
-                await server.wait_closed()
-                logger.info(f"WebSocket server stopped on port {port}")
-            except Exception as e:
-                logger.error(f"Error stopping WebSocket server on port {port}: {e}")
-        self._servers.clear()
+        pass

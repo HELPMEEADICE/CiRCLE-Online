@@ -70,15 +70,15 @@ async def lifespan(app: FastAPI):
 
     orchestrator.set_ws_server(ws_server)
 
-    # Start WebSocket servers on all configured ports
-    await ws_server.start_servers()
-
     logger.info("CiRCLE Online started")
     logger.info(f"WebSocket ports: {config.server.base_port}-{config.server.base_port + config.server.num_ports - 1}")
+
+    await orchestrator.start_initiation_task()
 
     yield
 
     logger.info("Shutting down...")
+    await orchestrator.stop_initiation_task()
     await ws_server.stop_servers()
     from backend.database import db
     await db.close()
@@ -582,8 +582,6 @@ async def update_chat_config(update: ChatConfigUpdate):
     config.orchestrator.context_compression.__dict__.update(current.orchestrator.context_compression.__dict__)
     config.chat.__dict__.update(current.chat.__dict__)
     config.logging.__dict__.update(current.logging.__dict__)
-
-    return {"success": True, "message": "聊天配置已保存"}
 
     return {"success": True, "message": "聊天配置已保存"}
 

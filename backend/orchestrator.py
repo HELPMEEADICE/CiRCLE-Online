@@ -358,7 +358,7 @@ class Orchestrator:
         port_configs = load_port_assignments()
         for port, char_name in self._assignments.items():
             if port not in port_configs:
-                port_configs[port] = {"name": f"Slot {port - 8080}", "character": char_name, "token": ""}
+                port_configs[port] = {"name": f"Slot {port - config.server.base_port + 1}", "character": char_name, "token": ""}
             else:
                 port_configs[port]["character"] = char_name
         save_port_assignments(port_configs)
@@ -427,6 +427,8 @@ class Orchestrator:
         bot_character = self.get_character_by_qq_id(user_id)
         is_bot = bot_character is not None
         if is_bot:
+            if bot_character == character_name:
+                return
             sender_name = bot_character
 
         session = await self._get_group_session(group_id)
