@@ -368,6 +368,16 @@ _EMOJI_TOOL = [{
 }]
 
 
+def _build_live_context_reply_prompt(trigger_message: str) -> str:
+    return (
+        "你原本是被这条消息触发准备回复："
+        f"{trigger_message}\n"
+        "但你现在必须先重新感知完整聊天记录，尤其是最后几条最新消息。"
+        "如果延迟期间话题变化、有人补充信息、或别人已经回应过，就顺着最新上下文自然接话；"
+        "不要机械地只回复这条触发消息。"
+    )
+
+
 class Orchestrator:
     def __init__(self):
         self._enabled = config.orchestrator.enabled
@@ -556,7 +566,7 @@ class Orchestrator:
         response = await llm_client.generate_roleplay_response(
             character_prompt=system_prompt,
             context=context,
-            user_message=processed_message,
+            user_message=_build_live_context_reply_prompt(processed_message),
             character_name=character_name,
             tools=_BAN_TOOL + _EMOJI_TOOL,
         )
@@ -820,7 +830,7 @@ class Orchestrator:
             response = await llm_client.generate_roleplay_response(
                 character_prompt=system_prompt,
                 context=context,
-                user_message=reply_text,
+                user_message=_build_live_context_reply_prompt(reply_text),
                 character_name=char_name,
             )
 
