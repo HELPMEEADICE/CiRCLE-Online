@@ -242,7 +242,7 @@ class CircleOnlineApp {
 
         this.setField('cfg-provider', c.llm.provider);
         this.setField('cfg-base_url', c.llm.base_url);
-        this.setField('cfg-api_key', c.llm.api_key);
+        this.setApiKeyField('cfg-api_key', c.llm.api_key_set);
         this.setField('cfg-model', c.llm.model);
         this.setField('cfg-model_thinking', c.llm.model_thinking);
         this.setField('cfg-assistant_model', c.llm.assistant_model);
@@ -257,7 +257,7 @@ class CircleOnlineApp {
                 visionEnabled.checked = c.llm.vision.enabled;
             }
             this.setField('cfg-vision_base_url', c.llm.vision.base_url);
-            this.setField('cfg-vision_api_key', c.llm.vision.api_key);
+            this.setApiKeyField('cfg-vision_api_key', c.llm.vision.api_key_set);
             this.setField('cfg-vision_model', c.llm.vision.model);
             this.setField('cfg-vision_thinking', c.llm.vision.thinking);
         }
@@ -307,6 +307,13 @@ class CircleOnlineApp {
         return el ? el.value : null;
     }
 
+    setApiKeyField(id, isSet) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.value = '';
+        el.placeholder = isSet ? '已配置，留空保持不变' : '未配置';
+    }
+
     async saveServerConfig() {
         const payload = {
             server: {
@@ -333,11 +340,12 @@ class CircleOnlineApp {
 
     async saveLLMConfig() {
         const visionEnabled = document.getElementById('cfg-vision_enabled')?.checked;
+        const apiKey = this.getField('cfg-api_key');
+        const visionApiKey = this.getField('cfg-vision_api_key');
         const payload = {
             llm: {
                 provider: this.getField('cfg-provider'),
                 base_url: this.getField('cfg-base_url'),
-                api_key: this.getField('cfg-api_key'),
                 model: this.getField('cfg-model'),
                 model_thinking: this.getField('cfg-model_thinking'),
                 assistant_model: this.getField('cfg-assistant_model'),
@@ -348,11 +356,12 @@ class CircleOnlineApp {
             vision: {
                 enabled: visionEnabled,
                 base_url: this.getField('cfg-vision_base_url'),
-                api_key: this.getField('cfg-vision_api_key'),
                 model: this.getField('cfg-vision_model'),
                 thinking: this.getField('cfg-vision_thinking'),
             },
         };
+        if (apiKey) payload.llm.api_key = apiKey;
+        if (visionApiKey) payload.vision.api_key = visionApiKey;
         await this.saveConfig(payload, 'LLM 配置已保存');
     }
 

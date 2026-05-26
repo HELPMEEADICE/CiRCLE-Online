@@ -216,12 +216,6 @@ async def reload_characters():
     return {"success": True, "count": len(character_manager.get_all_characters())}
 
 
-def _mask_api_key(key: str) -> str:
-    if not key or len(key) <= 8:
-        return "****" if key else ""
-    return key[:4] + "****" + key[-4:]
-
-
 @app.get("/api/config")
 async def get_config():
     cfg = load_config()
@@ -234,7 +228,7 @@ async def get_config():
         },
         "llm": {
             "provider": cfg.llm.provider,
-            "api_key": _mask_api_key(cfg.llm.api_key),
+            "api_key_set": bool(cfg.llm.api_key),
             "base_url": cfg.llm.base_url,
             "model": cfg.llm.model,
             "model_thinking": cfg.llm.model_thinking,
@@ -244,7 +238,7 @@ async def get_config():
             "max_tokens": cfg.llm.max_tokens,
             "vision": {
                 "enabled": cfg.llm.vision.enabled,
-                "api_key": _mask_api_key(cfg.llm.vision.api_key),
+                "api_key_set": bool(cfg.llm.vision.api_key),
                 "base_url": cfg.llm.vision.base_url,
                 "model": cfg.llm.vision.model,
                 "thinking": cfg.llm.vision.thinking,
@@ -343,7 +337,7 @@ async def update_config(update: ConfigUpdate):
     if update.llm:
         if update.llm.provider is not None:
             current.llm.provider = update.llm.provider
-        if update.llm.api_key is not None and "****" not in update.llm.api_key:
+        if update.llm.api_key:
             current.llm.api_key = update.llm.api_key
             llm_changed = True
         if update.llm.base_url is not None:
@@ -366,7 +360,7 @@ async def update_config(update: ConfigUpdate):
         if update.vision.enabled is not None:
             current.llm.vision.enabled = update.vision.enabled
             llm_changed = True
-        if update.vision.api_key is not None:
+        if update.vision.api_key:
             current.llm.vision.api_key = update.vision.api_key
             llm_changed = True
         if update.vision.base_url is not None:
