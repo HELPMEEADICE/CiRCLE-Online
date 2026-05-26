@@ -770,6 +770,26 @@ input:checked + .slider:before {
     padding-top: 8px;
 }
 
+.settings-divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 0 8px;
+    border-top: 1px solid var(--md-sys-color-outline-variant);
+    margin-top: 8px;
+}
+
+.settings-divider .material-icons-round {
+    font-size: 20px;
+    color: var(--md-sys-color-primary);
+}
+
+.settings-divider span:last-child {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--md-sys-color-on-surface);
+}
+
 /* ── MD3 Form Fields ── */
 .md3-field {
     display: flex;

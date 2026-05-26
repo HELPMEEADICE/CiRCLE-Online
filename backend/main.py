@@ -237,9 +237,18 @@ async def get_config():
             "api_key": _mask_api_key(cfg.llm.api_key),
             "base_url": cfg.llm.base_url,
             "model": cfg.llm.model,
+            "model_thinking": cfg.llm.model_thinking,
             "assistant_model": cfg.llm.assistant_model,
+            "assistant_model_thinking": cfg.llm.assistant_model_thinking,
             "temperature": cfg.llm.temperature,
             "max_tokens": cfg.llm.max_tokens,
+            "vision": {
+                "enabled": cfg.llm.vision.enabled,
+                "api_key": _mask_api_key(cfg.llm.vision.api_key),
+                "base_url": cfg.llm.vision.base_url,
+                "model": cfg.llm.vision.model,
+                "thinking": cfg.llm.vision.thinking,
+            },
         },
         "orchestrator": {
             "enabled": cfg.orchestrator.enabled,
@@ -275,9 +284,19 @@ class LLMConfigUpdate(BaseModel):
     api_key: str = None
     base_url: str = None
     model: str = None
+    model_thinking: str = None
     assistant_model: str = None
+    assistant_model_thinking: str = None
     temperature: float = None
     max_tokens: int = None
+
+
+class VisionConfigUpdate(BaseModel):
+    enabled: bool = None
+    api_key: str = None
+    base_url: str = None
+    model: str = None
+    thinking: str = None
 
 
 class OrchestratorConfigUpdate(BaseModel):
@@ -300,6 +319,7 @@ class ChatConfigUpdate(BaseModel):
 class ConfigUpdate(BaseModel):
     server: ServerConfigUpdate = None
     llm: LLMConfigUpdate = None
+    vision: VisionConfigUpdate = None
     orchestrator: OrchestratorConfigUpdate = None
     chat: ChatConfigUpdate = None
 
@@ -323,7 +343,7 @@ async def update_config(update: ConfigUpdate):
     if update.llm:
         if update.llm.provider is not None:
             current.llm.provider = update.llm.provider
-        if update.llm.api_key is not None:
+        if update.llm.api_key is not None and "****" not in update.llm.api_key:
             current.llm.api_key = update.llm.api_key
             llm_changed = True
         if update.llm.base_url is not None:
@@ -331,12 +351,33 @@ async def update_config(update: ConfigUpdate):
             llm_changed = True
         if update.llm.model is not None:
             current.llm.model = update.llm.model
+        if update.llm.model_thinking is not None:
+            current.llm.model_thinking = update.llm.model_thinking
         if update.llm.assistant_model is not None:
             current.llm.assistant_model = update.llm.assistant_model
+        if update.llm.assistant_model_thinking is not None:
+            current.llm.assistant_model_thinking = update.llm.assistant_model_thinking
         if update.llm.temperature is not None:
             current.llm.temperature = update.llm.temperature
         if update.llm.max_tokens is not None:
             current.llm.max_tokens = update.llm.max_tokens
+
+    if update.vision:
+        if update.vision.enabled is not None:
+            current.llm.vision.enabled = update.vision.enabled
+            llm_changed = True
+        if update.vision.api_key is not None:
+            current.llm.vision.api_key = update.vision.api_key
+            llm_changed = True
+        if update.vision.base_url is not None:
+            current.llm.vision.base_url = update.vision.base_url
+            llm_changed = True
+        if update.vision.model is not None:
+            current.llm.vision.model = update.vision.model
+            llm_changed = True
+        if update.vision.thinking is not None:
+            current.llm.vision.thinking = update.vision.thinking
+            llm_changed = True
 
     if update.orchestrator:
         if update.orchestrator.enabled is not None:

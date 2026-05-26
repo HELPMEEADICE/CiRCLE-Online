@@ -12,7 +12,9 @@ logger = get_logger("llm_client")
 class LLMClient:
     def __init__(self):
         self._client: Optional[AsyncOpenAI] = None
+        self._vision_client: Optional[AsyncOpenAI] = None
         self._init_client()
+        self._init_vision_client()
 
     def _init_client(self):
         from backend.config import config
@@ -29,13 +31,40 @@ class LLMClient:
         )
         logger.info(f"LLM client initialized: {config.llm.provider} @ {base_url}")
 
+    def _init_vision_client(self):
+        from backend.config import config
+        vision = config.llm.vision
+        if not vision.enabled:
+            self._vision_client = None
+            return
+
+        api_key = vision.api_key or config.llm.api_key
+        base_url = vision.base_url or config.llm.base_url
+
+        if not api_key:
+            logger.warning("Vision model API key not configured. Vision features disabled.")
+            self._vision_client = None
+            return
+
+        self._vision_client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+        )
+        logger.info(f"Vision model client initialized: {vision.model} @ {base_url}")
+
     def reinitialize(self):
         self._client = None
+        self._vision_client = None
         self._init_client()
+        self._init_vision_client()
 
     @property
     def is_available(self) -> bool:
         return self._client is not None
+
+    @property
+    def is_vision_available(self) -> bool:
+        return self._vision_client is not None
 
     def _get_extra_body(self, thinking: str) -> Optional[dict]:
         if thinking == "enabled":
@@ -43,6 +72,38 @@ class LLMClient:
         if thinking == "disabled":
             return {"thinking": {"type": "disabled"}}
         return None
+
+    async def analyze_image(self, image_url: str, prompt: str = "请详细描述这张图片的内容，包括表情包的文字、人物表情、动作等信息。") -> Optional[str]:
+        if not self._vision_client:
+            return None
+
+        from backend.config import config
+        vision = config.llm.vision
+        model = vision.model or config.llm.model
+
+        try:
+            messages = [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            }]
+            kwargs = dict(
+                model=model,
+                messages=messages,
+                max_tokens=1024,
+            )
+            extra_body = self._get_extra_body(vision.thinking)
+            if extra_body:
+                kwargs["extra_body"] = extra_body
+            response = await self._vision_client.chat.completions.create(**kwargs)
+            content = response.choices[0].message.content
+            logger.debug(f"Vision analysis: {content[:100]}...")
+            return content
+        except Exception as e:
+            logger.error(f"Vision API error: {e}")
+            return None
 
     async def generate_response(
         self,

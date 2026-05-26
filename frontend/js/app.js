@@ -30,12 +30,15 @@ class CircleOnlineApp {
     }
 
     initPasswordFields() {
-        // Initialize API Key field as hidden
-        const apiKeyInput = document.getElementById('cfg-api_key');
-        if (apiKeyInput) {
-            apiKeyInput.classList.add('password-hidden');
-            apiKeyInput.style.webkitTextSecurity = 'disc';
-        }
+        // Initialize API Key fields as hidden
+        const apiKeyInputs = ['cfg-api_key', 'cfg-vision_api_key'];
+        apiKeyInputs.forEach(id => {
+            const input = document.getElementById(id);
+            if (input) {
+                input.classList.add('password-hidden');
+                input.style.webkitTextSecurity = 'disc';
+            }
+        });
     }
 
     bindEvents() {
@@ -247,6 +250,18 @@ class CircleOnlineApp {
         this.setField('cfg-temperature', c.llm.temperature);
         this.setField('cfg-max_tokens', c.llm.max_tokens);
 
+        // Vision model config
+        if (c.llm.vision) {
+            const visionEnabled = document.getElementById('cfg-vision_enabled');
+            if (visionEnabled) {
+                visionEnabled.checked = c.llm.vision.enabled;
+            }
+            this.setField('cfg-vision_base_url', c.llm.vision.base_url);
+            this.setField('cfg-vision_api_key', c.llm.vision.api_key);
+            this.setField('cfg-vision_model', c.llm.vision.model);
+            this.setField('cfg-vision_thinking', c.llm.vision.thinking);
+        }
+
         this.setField('cfg-prompt_prefix', c.orchestrator.prompt_prefix);
         this.setField('cfg-prompt_suffix', c.orchestrator.prompt_suffix);
         const timeAware = document.getElementById('cfg-time_awareness');
@@ -317,6 +332,7 @@ class CircleOnlineApp {
     }
 
     async saveLLMConfig() {
+        const visionEnabled = document.getElementById('cfg-vision_enabled')?.checked;
         const payload = {
             llm: {
                 provider: this.getField('cfg-provider'),
@@ -328,6 +344,13 @@ class CircleOnlineApp {
                 assistant_model_thinking: this.getField('cfg-assistant_model_thinking'),
                 temperature: parseFloat(this.getField('cfg-temperature')) || null,
                 max_tokens: parseInt(this.getField('cfg-max_tokens')) || null,
+            },
+            vision: {
+                enabled: visionEnabled,
+                base_url: this.getField('cfg-vision_base_url'),
+                api_key: this.getField('cfg-vision_api_key'),
+                model: this.getField('cfg-vision_model'),
+                thinking: this.getField('cfg-vision_thinking'),
             },
         };
         await this.saveConfig(payload, 'LLM 配置已保存');

@@ -57,6 +57,18 @@ def parse_message_text(message_segments: list[dict]) -> str:
     return "".join(parts)
 
 
+def extract_image_urls(message_segments: list[dict]) -> list[str]:
+    urls = []
+    for seg in message_segments:
+        seg_type = seg.get("type", "")
+        data = seg.get("data", {})
+        if seg_type == "image":
+            url = data.get("url", "") or data.get("file", "")
+            if url:
+                urls.append(url)
+    return urls
+
+
 def build_text_message(text: str) -> list[dict]:
     return [{"type": "text", "data": {"text": text}}]
 

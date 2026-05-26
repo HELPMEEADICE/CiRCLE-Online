@@ -8,7 +8,7 @@ from backend.config import config, load_port_assignments, save_port_assignments
 from backend.llm_client import llm_client
 from backend.character_manager import character_manager
 from backend.token_counter import count_message_tokens, count_single_message_tokens, truncate_messages_to_token_budget
-from backend.utils import get_logger, parse_message_text, build_text_message
+from backend.utils import get_logger, parse_message_text, build_text_message, extract_image_urls
 
 logger = get_logger("orchestrator")
 
@@ -179,6 +179,19 @@ class Orchestrator:
         if not raw_message.strip():
             return
 
+        image_urls = extract_image_urls(message_segments)
+        if image_urls and config.llm.vision.enabled and llm_client.is_vision_available:
+            vision_descriptions = []
+            for url in image_urls:
+                desc = await llm_client.analyze_image(url)
+                if desc:
+                    vision_descriptions.append(desc)
+            if vision_descriptions:
+                raw_message = raw_message.replace("[图片]", "")
+                raw_message = raw_message.strip()
+                vision_text = " ".join(vision_descriptions)
+                raw_message = f"{raw_message} [图片内容: {vision_text}]" if raw_message else f"[图片内容: {vision_text}]"
+
         sender = data.get("sender", {})
         sender_name = sender.get("card", "") or sender.get("nickname", "")
 
@@ -239,6 +252,19 @@ class Orchestrator:
 
         if not raw_message.strip():
             return
+
+        image_urls = extract_image_urls(message_segments)
+        if image_urls and config.llm.vision.enabled and llm_client.is_vision_available:
+            vision_descriptions = []
+            for url in image_urls:
+                desc = await llm_client.analyze_image(url)
+                if desc:
+                    vision_descriptions.append(desc)
+            if vision_descriptions:
+                raw_message = raw_message.replace("[图片]", "")
+                raw_message = raw_message.strip()
+                vision_text = " ".join(vision_descriptions)
+                raw_message = f"{raw_message} [图片内容: {vision_text}]" if raw_message else f"[图片内容: {vision_text}]"
 
         session_key = f"private_{user_id}_{character_name}"
         session = self._sessions[session_key]

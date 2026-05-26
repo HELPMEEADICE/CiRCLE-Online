@@ -318,6 +318,54 @@
                                     </select>
                                     <span class="md3-helper">控制辅助模型的思考模式，默认不发送额外参数</span>
                                 </div>
+
+                                <div class="settings-divider">
+                                    <span class="material-icons-round">visibility</span>
+                                    <span>视觉模型配置</span>
+                                </div>
+
+                                <div class="md3-field">
+                                    <div class="md3-switch-row">
+                                        <div>
+                                            <label class="md3-label">启用视觉模型</label>
+                                            <span class="md3-helper" style="margin-top:4px">启用后将使用视觉模型解析图片和表情包</span>
+                                        </div>
+                                        <label class="md3-switch">
+                                            <input type="checkbox" id="cfg-vision_enabled">
+                                            <span class="slider"></span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">视觉模型 API 地址</label>
+                                    <input type="url" class="md3-input" id="cfg-vision_base_url" placeholder="留空使用默认 API 地址">
+                                    <span class="md3-helper">留空则使用主模型的 API 地址</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">视觉模型 API Key</label>
+                                    <div class="md3-input-group">
+                                        <input type="text" class="md3-input" id="cfg-vision_api_key" placeholder="留空使用默认 API Key" autocomplete="new-password">
+                                        <button class="md3-icon-btn" onclick="app.togglePasswordVisibility('cfg-vision_api_key')">
+                                            <span class="material-icons-round">visibility</span>
+                                        </button>
+                                    </div>
+                                    <span class="md3-helper">留空则使用主模型的 API Key</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">视觉模型名称</label>
+                                    <input type="text" class="md3-input" id="cfg-vision_model" placeholder="留空使用主模型">
+                                    <span class="md3-helper">支持视觉能力的模型，如 gpt-4o、claude-3.5-sonnet 等</span>
+                                </div>
+                                <div class="md3-field">
+                                    <label class="md3-label">视觉模型 Thinking</label>
+                                    <select class="md3-input md3-select" id="cfg-vision_thinking">
+                                        <option value="default">默认</option>
+                                        <option value="enabled">启用</option>
+                                        <option value="disabled">关闭</option>
+                                    </select>
+                                    <span class="md3-helper">控制视觉模型的思考模式</span>
+                                </div>
+
                                 <div class="md3-field">
                                     <label class="md3-label">温度 (Temperature)</label>
                                     <input type="number" class="md3-input" id="cfg-temperature" placeholder="0.8" min="0" max="2" step="0.1">

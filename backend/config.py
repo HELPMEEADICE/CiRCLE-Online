@@ -18,6 +18,14 @@ class ServerConfig(BaseSettings):
     management_port: int = 8080
 
 
+class VisionModelConfig(BaseSettings):
+    enabled: bool = False
+    api_key: str = ""
+    base_url: str = ""
+    model: str = ""
+    thinking: str = "default"
+
+
 class LLMConfig(BaseSettings):
     provider: str = "openai"
     api_key: str = ""
@@ -28,6 +36,7 @@ class LLMConfig(BaseSettings):
     assistant_model_thinking: str = "default"
     temperature: float = 0.8
     max_tokens: int = 1024
+    vision: VisionModelConfig = Field(default_factory=VisionModelConfig)
 
 
 class AutoDialogueConfig(BaseSettings):
@@ -99,7 +108,9 @@ def load_config() -> AppConfig:
         llm_raw["api_key"] = env_api_key
     if env_base_url:
         llm_raw["base_url"] = env_base_url
-    llm_cfg = LLMConfig(**llm_raw)
+    vision_raw = llm_raw.pop("vision", {})
+    vision_cfg = VisionModelConfig(**vision_raw)
+    llm_cfg = LLMConfig(**llm_raw, vision=vision_cfg)
 
     orchestrator_cfg = OrchestratorConfig(**raw.get("orchestrator", {}))
     chat_cfg = ChatConfig(**raw.get("chat", {}))
@@ -158,6 +169,14 @@ def save_config(app_config: AppConfig):
     lines.append(f'assistant_model_thinking = "{app_config.llm.assistant_model_thinking}"')
     lines.append(f"temperature = {app_config.llm.temperature}")
     lines.append(f"max_tokens = {app_config.llm.max_tokens}")
+    lines.append("")
+
+    lines.append("[llm.vision]")
+    lines.append(f"enabled = {'true' if app_config.llm.vision.enabled else 'false'}")
+    lines.append(f'api_key = "{app_config.llm.vision.api_key}"')
+    lines.append(f'base_url = "{app_config.llm.vision.base_url}"')
+    lines.append(f'model = "{app_config.llm.vision.model}"')
+    lines.append(f'thinking = "{app_config.llm.vision.thinking}"')
     lines.append("")
 
     lines.append("[orchestrator]")
