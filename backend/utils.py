@@ -38,8 +38,12 @@ def parse_message_text(message_segments: list[dict]) -> str:
         data = seg.get("data", {})
         if seg_type == "text":
             parts.append(data.get("text", ""))
-        elif seg_type == "mention":
-            parts.append(f"@{data.get('name', 'someone')}")
+        elif seg_type == "at":
+            qq = data.get("qq", "")
+            if qq == "all":
+                parts.append("@全体成员")
+            else:
+                parts.append(f"@{qq}")
         elif seg_type == "image":
             parts.append("[图片]")
         elif seg_type == "voice":
