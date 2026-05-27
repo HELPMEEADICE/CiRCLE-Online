@@ -86,6 +86,7 @@ async def lifespan(app: FastAPI):
         logger.info("Message buffer disabled, using direct message handling")
 
     msg_handler.on_private_message = orchestrator.handle_private_message
+    msg_handler.on_any_message = orchestrator.note_message_activity
 
     ws_server.set_status_callback(on_ws_status_change)
     ws_server.add_event_handler(msg_handler.handle_event)

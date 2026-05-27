@@ -464,6 +464,7 @@ class Orchestrator:
         self._chain_counters: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
         self._last_ai_reply_time: dict[str, dict[str, datetime]] = defaultdict(lambda: defaultdict(datetime.min))
         self._last_initiation_time: dict[str, datetime] = defaultdict(lambda: datetime.min)
+        self._group_activity_version: dict[str, int] = defaultdict(int)
         self._initiation_task: Optional[asyncio.Task] = None
 
     async def init_db(self):
@@ -498,6 +499,33 @@ class Orchestrator:
 
     def get_assignment(self, port: int) -> Optional[str]:
         return self._assignments.get(port)
+
+    async def note_message_activity(self, port: int, data: dict):
+        if data.get("message_type") != "group":
+            return
+
+        group_id = str(data.get("group_id", ""))
+        if not group_id:
+            return
+
+        self._group_activity_version[group_id] += 1
+        logger.debug(
+            f"Group {group_id} activity version -> {self._group_activity_version[group_id]} "
+            f"from port {port}"
+        )
+
+    def _get_group_activity_version(self, group_id: str) -> int:
+        return self._group_activity_version[group_id]
+
+    def _is_group_activity_current(self, group_id: str, version: int, reason: str) -> bool:
+        current = self._group_activity_version[group_id]
+        if current == version:
+            return True
+        logger.info(
+            f"Discarding stale reply for group {group_id}: {reason} "
+            f"(activity {version} -> {current})"
+        )
+        return False
 
     def set_assignment(self, port: int, character_name: str):
         self._assignments[port] = character_name
@@ -625,7 +653,11 @@ class Orchestrator:
         if not should_reply:
             return
 
+        activity_version = self._get_group_activity_version(group_id)
+
         await asyncio.sleep(config.orchestrator.reply_delay_ms / 1000)
+        if not self._is_group_activity_current(group_id, activity_version, f"before {character_name} generation"):
+            return
 
         system_prompt = character_manager.get_system_prompt(character_name)
         if not system_prompt:
@@ -644,6 +676,9 @@ class Orchestrator:
             character_name=character_name,
             tools=_BAN_TOOL + _EMOJI_TOOL + _ANALYZE_IMAGE_TOOL,
         )
+
+        if not self._is_group_activity_current(group_id, activity_version, f"after {character_name} generation"):
+            return
 
         if response:
             tool_results = []
@@ -978,6 +1013,7 @@ class Orchestrator:
             return
         
         session = await self._get_group_session(group_id)
+        activity_version = self._get_group_activity_version(group_id)
         
         system_prompt = character_manager.get_system_prompt(character_name)
         if not system_prompt:
@@ -1009,6 +1045,9 @@ class Orchestrator:
             character_name=character_name,
             tools=_BAN_TOOL + _EMOJI_TOOL + _ANALYZE_IMAGE_TOOL,
         )
+
+        if not self._is_group_activity_current(group_id, activity_version, f"after {character_name} dispatched generation"):
+            return
         
         if response:
             tool_results = []
@@ -1050,6 +1089,7 @@ class Orchestrator:
             return
 
         self._last_ai_reply_time[group_id][responding_character] = now
+        activity_version = self._get_group_activity_version(group_id)
 
         assigned_chars = list(self._assignments.values())
         session = await self._get_group_session(group_id)
@@ -1069,6 +1109,8 @@ class Orchestrator:
                 continue
 
             await asyncio.sleep(config.orchestrator.reply_delay_ms / 1000)
+            if not self._is_group_activity_current(group_id, activity_version, f"before {char_name} chain generation"):
+                return
 
             system_prompt = character_manager.get_system_prompt(char_name)
             if not system_prompt:
@@ -1085,6 +1127,9 @@ class Orchestrator:
                 user_message=_build_live_context_reply_prompt(reply_text),
                 character_name=char_name,
             )
+
+            if not self._is_group_activity_current(group_id, activity_version, f"after {char_name} chain generation"):
+                return
 
             if response and response.content:
                 self._chain_counters[group_id][char_name] += 1
@@ -1129,6 +1174,7 @@ class Orchestrator:
             return
 
         session = await self._get_group_session(group_id)
+        activity_version = self._get_group_activity_version(group_id)
         system_prompt = character_manager.get_system_prompt(initiating_char)
         if not system_prompt:
             return
@@ -1146,6 +1192,9 @@ class Orchestrator:
             user_message=initiation_prompt,
             character_name=initiating_char,
         )
+
+        if not self._is_group_activity_current(group_id, activity_version, f"after {initiating_char} initiation generation"):
+            return
 
         if response and response.content:
             self._last_initiation_time[group_id] = datetime.now()
