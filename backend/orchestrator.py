@@ -390,7 +390,7 @@ _EMOJI_TOOL = [{
     "function": {
         "name": "set_msg_emoji_like",
         "description": (
-            "给指定消息添加QQ表情回应。积极使用这个工具来表达你的态度！"
+            "给当前对话中的消息添加QQ表情回应。积极使用这个工具来表达你的态度！"
             "觉得消息很下头、无聊、离谱用🐛(128027)，无语、震惊、无奈用🐵(128053)，喜欢、赞同、开心用🐳(128051)。"
             "只要消息有任何情绪波动就用，尽量多用，让聊天更生动。"
             "可用表情ID：128027(🐛下头)、128053(🐵无语)、128051(🐳喜欢)"
@@ -457,6 +457,7 @@ class Orchestrator:
         self._assignments: dict[int, str] = {}
         self._group_sessions: dict[str, SessionMemory] = {}
         self._private_sessions: dict[str, SessionMemory] = {}
+        self._message_id_aliases: dict[str, dict[int, dict[int, int]]] = defaultdict(dict)
         self._ws_server = None
         self._load_assignments()
 
@@ -586,6 +587,7 @@ class Orchestrator:
         group_id = str(data.get("group_id", ""))
         user_id = str(data.get("user_id", ""))
         message_id = data.get("message_id", 0)
+        self._remember_message_id_aliases(group_id, data.get("_message_ids_by_port"), port, message_id)
         message_segments = data.get("message", [])
         raw_message = data.get("raw_message", "")
 
@@ -683,6 +685,7 @@ class Orchestrator:
         if response:
             tool_results = []
             if response.tool_calls:
+                self._remember_message_id_aliases(group_id, data.get("_message_ids_by_port"), port, message_id)
                 tool_results = await self._execute_tool_calls(response.tool_calls, group_id, port, is_private=False, context_message_id=message_id)
 
             reply_text = response.content
@@ -806,6 +809,37 @@ class Orchestrator:
 
         return random.random() < config.orchestrator.group_reply_probability
 
+    def _remember_message_id_aliases(self, group_id: str, aliases: dict | None, port: int = 0, message_id: int = 0):
+        normalized: dict[int, int] = {}
+        if aliases:
+            for alias_port, alias_message_id in aliases.items():
+                try:
+                    alias_port = int(alias_port)
+                    alias_message_id = int(alias_message_id)
+                except (TypeError, ValueError):
+                    continue
+                if alias_port and alias_message_id:
+                    normalized[alias_port] = alias_message_id
+        if port and message_id:
+            normalized[int(port)] = int(message_id)
+        if not group_id or not normalized:
+            return
+
+        group_aliases = self._message_id_aliases[group_id]
+        if len(group_aliases) > 1000:
+            for old_id in list(group_aliases)[:200]:
+                group_aliases.pop(old_id, None)
+        for alias_message_id in normalized.values():
+            group_aliases[alias_message_id] = normalized
+
+    def _resolve_message_id_for_port(self, group_id: str, message_id: int, port: int) -> int:
+        if not message_id:
+            return message_id
+        aliases = self._message_id_aliases.get(group_id, {}).get(int(message_id))
+        if aliases:
+            return aliases.get(port, int(message_id))
+        return int(message_id)
+
     async def _execute_tool_calls(self, tool_calls, group_id: str, port: int, is_private: bool = False, context_message_id: int = 0) -> list[str]:
         results = []
         for tc in tool_calls:
@@ -851,7 +885,8 @@ class Orchestrator:
                             results.append(f"[set_group_ban] 执行异常: {e}")
                             logger.error(f"[BAN ERROR] group={target_group} user={target_user} duration={duration} error={e}")
             elif tc.function_name == "set_msg_emoji_like":
-                msg_id = tc.arguments.get("message_id", 0) or context_message_id
+                msg_id = context_message_id or tc.arguments.get("message_id", 0)
+                msg_id = self._resolve_message_id_for_port(group_id, msg_id, port)
                 emoji_id = tc.arguments.get("emoji_id", "")
                 if not msg_id or not emoji_id:
                     results.append(f"[set_msg_emoji_like] 缺少参数")
@@ -964,6 +999,13 @@ class Orchestrator:
         
         # 1. 批量记录所有消息到 SessionMemory
         for msg in messages:
+            message_id = msg.data.get('message_id', 0)
+            self._remember_message_id_aliases(
+                group_id,
+                msg.data.get("_message_ids_by_port"),
+                msg.port,
+                message_id,
+            )
             # 机器人消息过滤
             bot_character = self.get_character_by_qq_id(msg.user_id)
             is_bot = bot_character is not None
@@ -981,7 +1023,7 @@ class Orchestrator:
                 display_content = f"[Poppin'Party成员] {bot_character}: {msg.raw_message}"
             if image_placeholders:
                 display_content = f"{display_content} {' '.join(image_placeholders)}"
-            display_content = f"{display_content} [message_id={msg.data.get('message_id', 0)}]"
+            display_content = f"{display_content} [message_id={message_id}]"
             
             # 记录到 SessionMemory
             await session.add(ChatMessage(
@@ -994,6 +1036,7 @@ class Orchestrator:
                 is_bot=is_bot,
                 sender_name=msg.sender_name,
                 image_urls=msg.image_urls if msg.image_urls else None,
+                message_id=message_id,
             ))
         
         logger.info(f"Recorded {len(messages)} messages for group {group_id}")

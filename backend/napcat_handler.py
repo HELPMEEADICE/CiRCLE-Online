@@ -27,6 +27,19 @@ class NapCatMessageHandler:
         self._message_buffer = None
         self._seen_msg_ids: dict[int, float] = {}  # message_id -> first_seen_time
         self._seen_message_keys: dict[tuple, float] = {}  # message signature -> first_seen_time
+        self._message_id_aliases: dict[tuple, dict[int, int]] = {}  # message signature -> port -> message_id
+
+    def _build_message_key(self, data: dict, raw_message: str) -> tuple:
+        message_segments = data.get("message", [])
+        message_text = parse_message_text(message_segments) if message_segments else normalize_raw_message_for_dedup(raw_message)
+        return (
+            data.get("message_type", ""),
+            str(data.get("group_id", "")),
+            str(data.get("user_id", "")),
+            data.get("time", ""),
+            message_text,
+            normalize_message_segments_for_dedup(message_segments),
+        )
 
     def set_message_buffer(self, buffer):
         """设置消息缓冲区"""
@@ -61,16 +74,20 @@ class NapCatMessageHandler:
                 k: v for k, v in self._seen_message_keys.items() if v > cutoff
             }
 
-        message_segments = data.get("message", [])
-        message_text = parse_message_text(message_segments) if message_segments else normalize_raw_message_for_dedup(raw_message)
-        key = (
-            data.get("message_type", ""),
-            str(data.get("group_id", "")),
-            str(data.get("user_id", "")),
-            data.get("time", ""),
-            message_text,
-            normalize_message_segments_for_dedup(message_segments),
-        )
+        key = self._build_message_key(data, raw_message)
+        if len(self._message_id_aliases) > 500:
+            cutoff = now - self._CONTENT_DEDUP_TTL
+            self._message_id_aliases = {
+                k: v for k, v in self._message_id_aliases.items()
+                if self._seen_message_keys.get(k, 0) > cutoff
+            }
+
+        aliases = self._message_id_aliases.setdefault(key, {})
+        message_id = data.get("message_id", 0)
+        if message_id:
+            aliases[data.get("_port", 0)] = message_id
+            data["_message_ids_by_port"] = aliases
+
         first_seen = self._seen_message_keys.get(key)
         if first_seen is not None and now - first_seen < self._CONTENT_DEDUP_TTL:
             return True
@@ -91,6 +108,7 @@ class NapCatMessageHandler:
             await self._handle_request(port, data)
 
     async def _handle_message(self, port: int, data: dict):
+        data["_port"] = port
         message_type = data.get("message_type", "")
         message_id = data.get("message_id", 0)
 
@@ -105,11 +123,11 @@ class NapCatMessageHandler:
             raw_message = parse_message_text(message_segments)
 
         # 去重：同一条消息通过多个端口到达时只处理一次
-        if self._is_duplicate(message_id):
-            logger.debug(f"[Port {port}] Duplicate message_id {message_id}, skipping")
-            return
         if self._is_duplicate_event(data, raw_message):
             logger.debug(f"[Port {port}] Duplicate message event, skipping")
+            return
+        if self._is_duplicate(message_id):
+            logger.debug(f"[Port {port}] Duplicate message_id {message_id}, skipping")
             return
 
         chat_msg = ChatMessage(

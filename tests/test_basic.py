@@ -255,7 +255,55 @@ async def test_napcat_handler_deduplicates_same_group_message_across_ports():
         event = {**base_event, "message_id": message_id}
         await handler.handle_event(port, event)
 
-    assert handled == [(8081, {**base_event, "message_id": 101})]
+    assert len(handled) == 1
+    assert handled[0][0] == 8081
+    assert handled[0][1]["message_id"] == 101
+    assert handled[0][1]["_message_ids_by_port"] == {
+        8081: 101,
+        8082: 102,
+        8083: 103,
+        8084: 104,
+        8085: 105,
+    }
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_translates_emoji_message_id_to_action_port():
+    from backend.llm_client import ToolCall
+    from backend.orchestrator import Orchestrator
+
+    sent_actions = []
+
+    class FakeConnection:
+        async def send_action(self, action, params, timeout=10.0):
+            sent_actions.append((action, params, timeout))
+            return {"status": "ok", "retcode": 0}
+
+    class FakeWebSocketServer:
+        def get_connection(self, port):
+            assert port == 8085
+            return FakeConnection()
+
+    orchestrator = Orchestrator()
+    orchestrator.set_ws_server(FakeWebSocketServer())
+    orchestrator._remember_message_id_aliases("1107527508", {
+        8081: 101,
+        8082: 102,
+        8083: 103,
+        8084: 104,
+        8085: 105,
+    })
+
+    results = await orchestrator._execute_tool_calls([
+        ToolCall(
+            id="call_1",
+            function_name="set_msg_emoji_like",
+            arguments={"message_id": 101, "emoji_id": "128051"},
+        )
+    ], "1107527508", 8085)
+
+    assert results == ["[set_msg_emoji_like] 已添加表情回应 🐳"]
+    assert sent_actions == [("set_msg_emoji_like", {"message_id": 105, "emoji_id": "128051"}, 30.0)]
 
 
 @pytest.mark.asyncio
