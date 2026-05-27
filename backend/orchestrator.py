@@ -780,6 +780,122 @@ class Orchestrator:
                 return p
         return None
 
+    async def handle_buffered_messages(self, group_id: str, messages: list):
+        """处理缓冲区 flush 的消息（由 MessageBuffer 调用）"""
+        from backend.character_manager import character_manager
+        from backend.llm_client import llm_client
+        from backend.message_buffer import BufferedMessage
+        
+        if not self._enabled:
+            return
+        
+        session = await self._get_group_session(group_id)
+        
+        # 1. 批量记录所有消息到 SessionMemory
+        for msg in messages:
+            # 机器人消息过滤
+            bot_character = self.get_character_by_qq_id(msg.user_id)
+            is_bot = bot_character is not None
+            
+            # 图片分析（如果需要）
+            vision_text = ""
+            if msg.image_urls and config.llm.vision.enabled and llm_client.is_vision_available:
+                vision_descriptions = []
+                for url in msg.image_urls:
+                    desc = await llm_client.analyze_image(url)
+                    if desc:
+                        vision_descriptions.append(desc)
+                if vision_descriptions:
+                    vision_text = " ".join(vision_descriptions)
+            
+            # 构建显示内容
+            display_content = f"[{msg.sender_name}]: {msg.raw_message}"
+            if is_bot:
+                display_content = f"[Poppin'Party成员] {bot_character}: {msg.raw_message}"
+            if vision_text:
+                display_content = f"{display_content} [图片内容: {vision_text}]"
+            display_content = f"{display_content} [message_id={msg.data.get('message_id', 0)}]"
+            
+            # 记录到 SessionMemory
+            await session.add(ChatMessage(
+                role="user",
+                content=display_content,
+                raw_content=msg.raw_message,
+                vision_content=vision_text or None,
+                qq_id=msg.user_id,
+                character=bot_character if is_bot else None,
+                is_bot=is_bot,
+                sender_name=msg.sender_name,
+            ))
+        
+        logger.info(f"Recorded {len(messages)} messages for group {group_id}")
+
+    async def execute_reply(self, group_id: str, character_name: str, 
+                            strategy: str = None, trigger_message=None):
+        """执行角色回复（由 Dispatcher 调用）"""
+        from backend.character_manager import character_manager
+        from backend.llm_client import llm_client
+        
+        if not self._enabled:
+            return
+        
+        port = self._find_port_for_character(character_name)
+        if not port:
+            logger.warning(f"No port found for character {character_name}")
+            return
+        
+        session = await self._get_group_session(group_id)
+        
+        system_prompt = character_manager.get_system_prompt(character_name)
+        if not system_prompt:
+            logger.warning(f"No system prompt for character: {character_name}")
+            return
+        
+        # 添加上下文压缩
+        compression_context = load_context_compression(session.session_key)
+        if compression_context:
+            system_prompt = f"{system_prompt}\n\n[历史对话压缩摘要]\n{compression_context}"
+        
+        # 如果有策略，添加到 prompt
+        if strategy:
+            system_prompt = f"{system_prompt}\n\n[回复策略] {strategy}"
+        
+        context = session.get_context_for_character(character_name, self._bot_qq_map)
+        
+        # 构建触发消息提示
+        trigger_hint = ""
+        if trigger_message:
+            trigger_hint = _build_live_context_reply_prompt(trigger_message.raw_message)
+        else:
+            trigger_hint = "请根据最近的聊天内容自然地参与对话。"
+        
+        response = await llm_client.generate_roleplay_response(
+            character_prompt=system_prompt,
+            context=context,
+            user_message=trigger_hint,
+            character_name=character_name,
+            tools=_BAN_TOOL + _EMOJI_TOOL,
+        )
+        
+        if response:
+            tool_results = []
+            if response.tool_calls:
+                tool_results = await self._execute_tool_calls(response.tool_calls, group_id, port)
+            
+            reply_text = response.content
+            if tool_results and not reply_text:
+                non_emoji_results = [r for r in tool_results if not r.startswith("[set_msg_emoji_like]")]
+                if non_emoji_results:
+                    reply_text = non_emoji_results[0]
+            
+            if reply_text:
+                await session.add(ChatMessage(
+                    role="assistant",
+                    content=reply_text,
+                    character=character_name,
+                ))
+                await self._send_reply(port, group_id, reply_text)
+
     async def handle_ai_reply(self, port: int, group_id: str, responding_character: str,
                               reply_text: str, depth: int = 0):
         from backend.llm_client import llm_client

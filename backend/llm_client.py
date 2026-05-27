@@ -283,6 +283,18 @@ class LLMClient:
             thinking=config.llm.assistant_model_thinking,
         )
 
+    async def generate_dispatcher_decision(
+        self,
+        system_prompt: str,
+        messages: list[ChatMessage],
+        temperature: float = None,
+        max_tokens: int = None,
+    ) -> Optional[str]:
+        """调用辅助模型生成分配器决策（与 generate_assistant_response 相同，但语义更清晰）"""
+        return await self.generate_assistant_response(
+            system_prompt, messages, temperature, max_tokens
+        )
+
     async def compress_context(
         self,
         messages: list[ChatMessage],

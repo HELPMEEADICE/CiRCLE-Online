@@ -12,6 +12,8 @@ from backend.napcat_handler import NapCatMessageHandler
 from backend.orchestrator import init_orchestrator
 from backend.character_manager import init_character_manager
 from backend.llm_client import init_llm_client
+from backend.message_buffer import init_message_buffer
+from backend.dispatcher import init_dispatcher
 from backend.utils import setup_logging, get_logger
 from backend.database import init_db
 from backend.auth import create_token, verify_token, revoke_token
@@ -26,6 +28,8 @@ msg_handler: NapCatMessageHandler = None
 orchestrator = None
 character_manager = None
 llm_client = None
+message_buffer = None
+dispatcher = None
 
 
 async def on_ws_status_change(event: str, port: int, qq_id: str = None):
@@ -40,7 +44,7 @@ async def on_ws_status_change(event: str, port: int, qq_id: str = None):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global ws_server, msg_handler, orchestrator, character_manager, llm_client
+    global ws_server, msg_handler, orchestrator, character_manager, llm_client, message_buffer, dispatcher
 
     # Initialize singletons in dependency order
     init_config()
@@ -60,7 +64,27 @@ async def lifespan(app: FastAPI):
     ws_server = MultiPortWebSocketServer(config.server.base_port, config.server.num_ports, config.server.host)
     msg_handler = NapCatMessageHandler()
 
-    msg_handler.on_group_message = orchestrator.handle_group_message
+    # 初始化分配器
+    dispatcher = init_dispatcher()
+    # 设置可用角色
+    available_characters = list(orchestrator._assignments.values())
+    dispatcher.set_available_characters(available_characters)
+
+    # 初始化消息缓冲区
+    if config.orchestrator.buffer.enabled:
+        message_buffer = init_message_buffer(
+            window_ms=config.orchestrator.buffer.window_ms,
+            max_size=config.orchestrator.buffer.max_size,
+            on_flush=dispatcher.on_flush,
+        )
+        # 设置到 napcat_handler
+        msg_handler.set_message_buffer(message_buffer)
+        logger.info(f"Message buffer enabled: window={config.orchestrator.buffer.window_ms}ms, max_size={config.orchestrator.buffer.max_size}")
+    else:
+        # 如果缓冲区禁用，使用原有回调
+        msg_handler.on_group_message = orchestrator.handle_group_message
+        logger.info("Message buffer disabled, using direct message handling")
+
     msg_handler.on_private_message = orchestrator.handle_private_message
 
     ws_server.set_status_callback(on_ws_status_change)
@@ -76,12 +100,18 @@ async def lifespan(app: FastAPI):
 
     logger.info("CiRCLE Online started")
     logger.info(f"WebSocket ports: {config.server.base_port}-{config.server.base_port + config.server.num_ports - 1}")
+    logger.info(f"Dispatcher enabled: {config.orchestrator.dispatcher.enabled}")
 
     await orchestrator.start_initiation_task()
 
     yield
 
     logger.info("Shutting down...")
+    # 清理消息缓冲区
+    if message_buffer:
+        await message_buffer.flush_all()
+        logger.info("Message buffer flushed")
+    
     await orchestrator.stop_initiation_task()
     await ws_server.stop_servers()
     from backend.database import db
@@ -508,6 +538,8 @@ async def update_config(update: ConfigUpdate):
     config.orchestrator.__dict__.update(current.orchestrator.__dict__)
     config.orchestrator.auto_dialogue.__dict__.update(current.orchestrator.auto_dialogue.__dict__)
     config.orchestrator.context_compression.__dict__.update(current.orchestrator.context_compression.__dict__)
+    config.orchestrator.buffer.__dict__.update(current.orchestrator.buffer.__dict__)
+    config.orchestrator.dispatcher.__dict__.update(current.orchestrator.dispatcher.__dict__)
     config.chat.__dict__.update(current.chat.__dict__)
     config.logging.__dict__.update(current.logging.__dict__)
 
@@ -611,10 +643,42 @@ async def update_chat_config(update: ChatConfigUpdate):
     config.orchestrator.__dict__.update(current.orchestrator.__dict__)
     config.orchestrator.auto_dialogue.__dict__.update(current.orchestrator.auto_dialogue.__dict__)
     config.orchestrator.context_compression.__dict__.update(current.orchestrator.context_compression.__dict__)
+    config.orchestrator.buffer.__dict__.update(current.orchestrator.buffer.__dict__)
+    config.orchestrator.dispatcher.__dict__.update(current.orchestrator.dispatcher.__dict__)
     config.chat.__dict__.update(current.chat.__dict__)
     config.logging.__dict__.update(current.logging.__dict__)
 
     return {"success": True, "message": "聊天配置已保存"}
+
+
+@app.get("/api/dispatcher/status")
+async def get_dispatcher_status():
+    """获取分配器和消息缓冲区状态"""
+    result = {
+        "dispatcher_enabled": config.orchestrator.dispatcher.enabled,
+        "buffer_enabled": config.orchestrator.buffer.enabled,
+    }
+    
+    if message_buffer:
+        result["buffer"] = message_buffer.get_stats()
+    
+    if dispatcher:
+        result["dispatcher"] = dispatcher.get_stats()
+    
+    return result
+
+
+@app.post("/api/dispatcher/chat-state")
+async def set_chat_state(group_id: str, state: str):
+    """手动设置群的对话状态"""
+    if state not in ("active", "winding_down", "terminated"):
+        raise HTTPException(400, "Invalid state. Must be: active, winding_down, terminated")
+    
+    if dispatcher:
+        dispatcher.set_chat_state(group_id, state)
+        return {"success": True, "group_id": group_id, "state": state}
+    
+    raise HTTPException(500, "Dispatcher not initialized")
 
 
 def run():

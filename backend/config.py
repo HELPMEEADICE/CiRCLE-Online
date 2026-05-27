@@ -62,6 +62,22 @@ class ContextCompressionConfig(BaseSettings):
     model: str = ""
 
 
+class BufferConfig(BaseSettings):
+    """消息缓冲区配置"""
+    enabled: bool = True
+    window_ms: int = 3000
+    max_size: int = 50
+
+
+class DispatcherConfig(BaseSettings):
+    """分配器配置"""
+    enabled: bool = True
+    fallback_to_simple: bool = True
+    fallback_reply_probability: float = 0.3
+    assistant_max_tokens: int = 1024
+    assistant_temperature: float = 0.3
+
+
 class OrchestratorConfig(BaseSettings):
     enabled: bool = True
     reply_delay_ms: int = 1000
@@ -73,6 +89,8 @@ class OrchestratorConfig(BaseSettings):
     time_awareness: bool = False
     auto_dialogue: AutoDialogueConfig = Field(default_factory=AutoDialogueConfig)
     context_compression: ContextCompressionConfig = Field(default_factory=ContextCompressionConfig)
+    buffer: BufferConfig = Field(default_factory=BufferConfig)
+    dispatcher: DispatcherConfig = Field(default_factory=DispatcherConfig)
 
 
 class LoggingConfig(BaseSettings):
@@ -203,6 +221,20 @@ def save_config(app_config: AppConfig):
     lines.append(f'model = "{app_config.orchestrator.context_compression.model}"')
     lines.append("")
 
+    lines.append("[orchestrator.buffer]")
+    lines.append(f"enabled = {'true' if app_config.orchestrator.buffer.enabled else 'false'}")
+    lines.append(f"window_ms = {app_config.orchestrator.buffer.window_ms}")
+    lines.append(f"max_size = {app_config.orchestrator.buffer.max_size}")
+    lines.append("")
+
+    lines.append("[orchestrator.dispatcher]")
+    lines.append(f"enabled = {'true' if app_config.orchestrator.dispatcher.enabled else 'false'}")
+    lines.append(f"fallback_to_simple = {'true' if app_config.orchestrator.dispatcher.fallback_to_simple else 'false'}")
+    lines.append(f"fallback_reply_probability = {app_config.orchestrator.dispatcher.fallback_reply_probability}")
+    lines.append(f"assistant_max_tokens = {app_config.orchestrator.dispatcher.assistant_max_tokens}")
+    lines.append(f"assistant_temperature = {app_config.orchestrator.dispatcher.assistant_temperature}")
+    lines.append("")
+
     lines.append("[orchestrator.auto_dialogue]")
     lines.append(f"enabled = {'true' if app_config.orchestrator.auto_dialogue.enabled else 'false'}")
     lines.append(f"chain_length = {app_config.orchestrator.auto_dialogue.chain_length}")
@@ -237,6 +269,8 @@ def init_config():
     config.orchestrator.__dict__.update(loaded.orchestrator.__dict__)
     config.orchestrator.auto_dialogue.__dict__.update(loaded.orchestrator.auto_dialogue.__dict__)
     config.orchestrator.context_compression.__dict__.update(loaded.orchestrator.context_compression.__dict__)
+    config.orchestrator.buffer.__dict__.update(loaded.orchestrator.buffer.__dict__)
+    config.orchestrator.dispatcher.__dict__.update(loaded.orchestrator.dispatcher.__dict__)
     config.chat.__dict__.update(loaded.chat.__dict__)
     config.logging.__dict__.update(loaded.logging.__dict__)
     return config

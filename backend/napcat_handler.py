@@ -1,7 +1,8 @@
 import json
+from datetime import datetime
 from typing import Optional, Callable
 from backend.models import MessageEvent, ChatMessage
-from backend.utils import get_logger, parse_message_text
+from backend.utils import get_logger, parse_message_text, extract_image_urls
 
 logger = get_logger("napcat_handler")
 
@@ -13,6 +14,11 @@ class NapCatMessageHandler:
         self.on_any_message: Optional[Callable] = None
         self._message_log: list[ChatMessage] = []
         self._max_log_size = 100
+        self._message_buffer = None
+
+    def set_message_buffer(self, buffer):
+        """设置消息缓冲区"""
+        self._message_buffer = buffer
 
     async def handle_event(self, port: int, data: dict):
         post_type = data.get("post_type", "")
@@ -50,8 +56,25 @@ class NapCatMessageHandler:
         if self.on_any_message:
             await self.on_any_message(port, data)
 
-        if message_type == "group" and self.on_group_message:
-            await self.on_group_message(port, data)
+        if message_type == "group":
+            # 如果启用了消息缓冲区，推入缓冲区
+            if self._message_buffer:
+                from backend.message_buffer import BufferedMessage
+                buffered_msg = BufferedMessage(
+                    port=port,
+                    data=data,
+                    timestamp=datetime.now(),
+                    group_id=group_id,
+                    user_id=user_id,
+                    raw_message=raw_message,
+                    sender_name=sender_name,
+                    message_segments=message_segments,
+                    image_urls=extract_image_urls(message_segments),
+                )
+                await self._message_buffer.push(group_id, buffered_msg)
+            elif self.on_group_message:
+                # Fallback：如果没有缓冲区，直接调用原有回调
+                await self.on_group_message(port, data)
         elif message_type == "private" and self.on_private_message:
             await self.on_private_message(port, data)
 
