@@ -513,6 +513,119 @@ async def test_generate_roleplay_response_inserts_tool_guidance_between_history_
 
 
 @pytest.mark.asyncio
+async def test_generate_roleplay_response_keeps_tool_guidance_adjacent_to_current_message_with_long_context():
+    import backend.llm_client as llm_client_module
+    from backend.llm_client import LLMClient
+
+    captured_messages = None
+    long_context = [ChatMessage(role="user", content=f"历史消息{i}") for i in range(80)]
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            nonlocal captured_messages
+            captured_messages = kwargs["messages"]
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="收到", tool_calls=[])
+                    )
+                ]
+            )
+
+    llm = LLMClient()
+    llm._client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    response = await llm.generate_roleplay_response(
+        character_prompt="你是户山香澄",
+        context=long_context,
+        user_message="当前消息",
+        character_name="户山香澄",
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "set_msg_emoji_like",
+                    "description": "给指定消息添加表情回应",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "message_id": {"type": "integer", "description": "目标消息ID"},
+                            "emoji_id": {"type": "string", "description": "表情ID"},
+                        },
+                        "required": ["message_id", "emoji_id"],
+                    },
+                },
+            }
+        ],
+    )
+
+    assert response.content == "收到"
+    assert captured_messages is not None
+    assert captured_messages[-2]["role"] == "system"
+    assert "set_msg_emoji_like" in captured_messages[-2]["content"]
+    assert captured_messages[-1] == {"role": "user", "content": "当前消息"}
+
+
+@pytest.mark.asyncio
+async def test_generate_roleplay_response_trims_old_context_but_keeps_tool_guidance_and_current_message(monkeypatch):
+    import backend.llm_client as llm_client_module
+    from backend.llm_client import LLMClient
+
+    captured_messages = None
+    long_context = [ChatMessage(role="user", content=f"历史消息{i}-" + "很长" * 20) for i in range(20)]
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            nonlocal captured_messages
+            captured_messages = kwargs["messages"]
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="收到", tool_calls=[])
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(llm_client_module, "_ROLEPLAY_CONTEXT_SOFT_LIMIT_TOKENS", 220)
+
+    llm = LLMClient()
+    llm._client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    response = await llm.generate_roleplay_response(
+        character_prompt="你是户山香澄",
+        context=long_context,
+        user_message="当前消息",
+        character_name="户山香澄",
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "set_msg_emoji_like",
+                    "description": "给指定消息添加表情回应",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "message_id": {"type": "integer", "description": "目标消息ID"},
+                            "emoji_id": {"type": "string", "description": "表情ID"},
+                        },
+                        "required": ["message_id", "emoji_id"],
+                    },
+                },
+            }
+        ],
+    )
+
+    assert response.content == "收到"
+    assert captured_messages is not None
+    assert captured_messages[-2]["role"] == "system"
+    assert "set_msg_emoji_like" in captured_messages[-2]["content"]
+    assert captured_messages[-1] == {"role": "user", "content": "当前消息"}
+    captured_contents = [message["content"] for message in captured_messages]
+    assert not any("历史消息0-" in content for content in captured_contents)
+    assert any("历史消息19-" in content for content in captured_contents)
+
+
+@pytest.mark.asyncio
 async def test_generate_roleplay_response_downgrades_untrusted_system_context():
     from backend.llm_client import LLMClient
 

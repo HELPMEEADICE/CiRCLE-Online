@@ -6,6 +6,7 @@ from typing import Optional
 from openai import AsyncOpenAI
 from backend.config import config
 from backend.models import ChatMessage
+from backend.token_counter import count_single_message_tokens, truncate_messages_to_token_budget
 from backend.utils import get_logger
 
 
@@ -25,6 +26,8 @@ class RoleplayResponse:
         return self.content is not None or len(self.tool_calls) > 0
 
 logger = get_logger("llm_client")
+
+_ROLEPLAY_CONTEXT_SOFT_LIMIT_TOKENS = 24000
 
 
 class LLMClient:
@@ -149,6 +152,29 @@ class LLMClient:
             normalized.append(msg)
         return normalized
 
+    def _truncate_roleplay_context_messages(
+        self,
+        context: list[ChatMessage],
+        trailing_messages: list[ChatMessage],
+    ) -> list[ChatMessage]:
+        trailing_tokens = sum(count_single_message_tokens(msg) for msg in trailing_messages)
+        if trailing_tokens >= _ROLEPLAY_CONTEXT_SOFT_LIMIT_TOKENS:
+            logger.warning(
+                "Trailing roleplay messages already exceed soft limit: %s tokens",
+                trailing_tokens,
+            )
+            return []
+
+        available_context_tokens = _ROLEPLAY_CONTEXT_SOFT_LIMIT_TOKENS - trailing_tokens
+        kept_context = truncate_messages_to_token_budget(context, available_context_tokens)
+        dropped_count = len(context) - len(kept_context)
+        if dropped_count > 0:
+            logger.info(
+                "Trimmed %s older roleplay context messages before model call",
+                dropped_count,
+            )
+        return kept_context
+
     async def analyze_image(self, image_url: str, prompt: str = "请详细描述这张图片的内容，包括表情包的文字、人物表情、动作等信息。") -> Optional[str]:
         if not self._vision_client:
             return None
@@ -230,11 +256,15 @@ class LLMClient:
         character_name: str = "",
         tools: list[dict] = None,
     ) -> RoleplayResponse | None:
-        messages = self._normalize_roleplay_context_messages(context)
         tool_guidance_message = self._build_tool_guidance_message(tools)
+        current_message = ChatMessage(role="user", content=user_message)
+        trailing_messages = [current_message]
         if tool_guidance_message:
-            messages.append(tool_guidance_message)
-        messages.append(ChatMessage(role="user", content=user_message))
+            trailing_messages.insert(0, tool_guidance_message)
+
+        normalized_context = self._normalize_roleplay_context_messages(context)
+        messages = self._truncate_roleplay_context_messages(normalized_context, trailing_messages)
+        messages.extend(trailing_messages)
 
         prefix = config.orchestrator.prompt_prefix
         suffix = config.orchestrator.prompt_suffix
