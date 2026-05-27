@@ -118,5 +118,35 @@ async def test_send_action_registers_echo_before_send():
     assert resp == {"status": "ok", "retcode": 0}
 
 
+@pytest.mark.asyncio
+async def test_napcat_handler_deduplicates_same_group_message_across_ports():
+    from backend.napcat_handler import NapCatMessageHandler
+
+    handled = []
+
+    async def on_group_message(port, data):
+        handled.append((port, data))
+
+    handler = NapCatMessageHandler()
+    handler.on_group_message = on_group_message
+
+    base_event = {
+        "post_type": "message",
+        "message_type": "group",
+        "group_id": 1107527508,
+        "user_id": 1183508397,
+        "time": 1780000000,
+        "raw_message": "谁来了",
+        "message": [{"type": "text", "data": {"text": "谁来了"}}],
+        "sender": {"nickname": "自然常数2.718"},
+    }
+
+    for port, message_id in ((8081, 101), (8082, 102), (8083, 103), (8084, 104), (8085, 105)):
+        event = {**base_event, "message_id": message_id}
+        await handler.handle_event(port, event)
+
+    assert handled == [(8081, {**base_event, "message_id": 101})]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

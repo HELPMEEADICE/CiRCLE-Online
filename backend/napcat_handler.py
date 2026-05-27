@@ -11,6 +11,7 @@ logger = get_logger("napcat_handler")
 class NapCatMessageHandler:
     # message_id 去重：同一 message_id 在 TTL 内只处理一次
     _DEDUP_TTL = 10.0  # 秒
+    _CONTENT_DEDUP_TTL = 2.0  # 秒，同一 QQ 消息会几乎同时从多个端口到达
 
     def __init__(self):
         self.on_group_message: Optional[Callable] = None
@@ -20,6 +21,7 @@ class NapCatMessageHandler:
         self._max_log_size = 100
         self._message_buffer = None
         self._seen_msg_ids: dict[int, float] = {}  # message_id -> first_seen_time
+        self._seen_message_keys: dict[tuple, float] = {}  # message signature -> first_seen_time
 
     def set_message_buffer(self, buffer):
         """设置消息缓冲区"""
@@ -41,6 +43,34 @@ class NapCatMessageHandler:
         self._seen_msg_ids[message_id] = now
         return False
 
+    def _is_duplicate_event(self, data: dict, raw_message: str) -> bool:
+        """检查跨端口重复事件。
+
+        NapCat 多端点连接同一群时，同一条 QQ 消息可能以不同 message_id
+        同时推送到每个端口；用短时间窗口内的消息内容签名兜底去重。
+        """
+        now = time.monotonic()
+        if len(self._seen_message_keys) > 500:
+            cutoff = now - self._CONTENT_DEDUP_TTL
+            self._seen_message_keys = {
+                k: v for k, v in self._seen_message_keys.items() if v > cutoff
+            }
+
+        key = (
+            data.get("message_type", ""),
+            str(data.get("group_id", "")),
+            str(data.get("user_id", "")),
+            data.get("time", ""),
+            raw_message,
+            json.dumps(data.get("message", []), ensure_ascii=False, sort_keys=True, default=str),
+        )
+        first_seen = self._seen_message_keys.get(key)
+        if first_seen is not None and now - first_seen < self._CONTENT_DEDUP_TTL:
+            return True
+
+        self._seen_message_keys[key] = now
+        return False
+
     async def handle_event(self, port: int, data: dict):
         post_type = data.get("post_type", "")
 
@@ -57,11 +87,6 @@ class NapCatMessageHandler:
         message_type = data.get("message_type", "")
         message_id = data.get("message_id", 0)
 
-        # 去重：同一条消息通过多个端口到达时只处理一次
-        if self._is_duplicate(message_id):
-            logger.debug(f"[Port {port}] Duplicate message_id {message_id}, skipping")
-            return
-
         message_segments = data.get("message", [])
         raw_message = data.get("raw_message", "")
         user_id = str(data.get("user_id", ""))
@@ -71,6 +96,14 @@ class NapCatMessageHandler:
 
         if not raw_message and message_segments:
             raw_message = parse_message_text(message_segments)
+
+        # 去重：同一条消息通过多个端口到达时只处理一次
+        if self._is_duplicate(message_id):
+            logger.debug(f"[Port {port}] Duplicate message_id {message_id}, skipping")
+            return
+        if self._is_duplicate_event(data, raw_message):
+            logger.debug(f"[Port {port}] Duplicate message event, skipping")
+            return
 
         chat_msg = ChatMessage(
             role="user",
