@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import datetime
 from typing import Optional, Callable
 from backend.models import MessageEvent, ChatMessage
@@ -8,6 +9,9 @@ logger = get_logger("napcat_handler")
 
 
 class NapCatMessageHandler:
+    # message_id 去重：同一 message_id 在 TTL 内只处理一次
+    _DEDUP_TTL = 10.0  # 秒
+
     def __init__(self):
         self.on_group_message: Optional[Callable] = None
         self.on_private_message: Optional[Callable] = None
@@ -15,10 +19,27 @@ class NapCatMessageHandler:
         self._message_log: list[ChatMessage] = []
         self._max_log_size = 100
         self._message_buffer = None
+        self._seen_msg_ids: dict[int, float] = {}  # message_id -> first_seen_time
 
     def set_message_buffer(self, buffer):
         """设置消息缓冲区"""
         self._message_buffer = buffer
+
+    def _is_duplicate(self, message_id: int) -> bool:
+        """检查 message_id 是否重复，并清理过期条目"""
+        if not message_id:
+            return False
+        now = time.monotonic()
+        # 清理过期条目（批量清理避免每次调用都遍历）
+        if len(self._seen_msg_ids) > 100:
+            cutoff = now - self._DEDUP_TTL
+            self._seen_msg_ids = {k: v for k, v in self._seen_msg_ids.items() if v > cutoff}
+        # 检查是否重复
+        if message_id in self._seen_msg_ids:
+            if now - self._seen_msg_ids[message_id] < self._DEDUP_TTL:
+                return True
+        self._seen_msg_ids[message_id] = now
+        return False
 
     async def handle_event(self, port: int, data: dict):
         post_type = data.get("post_type", "")
@@ -34,6 +55,13 @@ class NapCatMessageHandler:
 
     async def _handle_message(self, port: int, data: dict):
         message_type = data.get("message_type", "")
+        message_id = data.get("message_id", 0)
+
+        # 去重：同一条消息通过多个端口到达时只处理一次
+        if self._is_duplicate(message_id):
+            logger.debug(f"[Port {port}] Duplicate message_id {message_id}, skipping")
+            return
+
         message_segments = data.get("message", [])
         raw_message = data.get("raw_message", "")
         user_id = str(data.get("user_id", ""))
