@@ -76,6 +76,8 @@ class DispatcherConfig(BaseSettings):
     fallback_reply_probability: float = 0.3
     assistant_max_tokens: int = 1024
     assistant_temperature: float = 0.3
+    dispatcher_preset: str = "balanced"
+    dispatcher_prompt: str = ""
 
 
 class OrchestratorConfig(BaseSettings):
@@ -233,6 +235,8 @@ def save_config(app_config: AppConfig):
     lines.append(f"fallback_reply_probability = {app_config.orchestrator.dispatcher.fallback_reply_probability}")
     lines.append(f"assistant_max_tokens = {app_config.orchestrator.dispatcher.assistant_max_tokens}")
     lines.append(f"assistant_temperature = {app_config.orchestrator.dispatcher.assistant_temperature}")
+    lines.append(f'dispatcher_preset = "{app_config.orchestrator.dispatcher.dispatcher_preset}"')
+    lines.append(f"dispatcher_prompt = {_toml_multiline_string(app_config.orchestrator.dispatcher.dispatcher_prompt)}")
     lines.append("")
 
     lines.append("[orchestrator.auto_dialogue]")

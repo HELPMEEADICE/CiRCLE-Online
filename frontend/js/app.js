@@ -19,6 +19,7 @@ class CircleOnlineApp {
         this.currentPage = 'dashboard';
         this.refreshInterval = null;
         this.token = localStorage.getItem('auth_token') || '';
+        this._selectedDispatcherPreset = 'balanced';
     }
 
     async init() {
@@ -388,6 +389,7 @@ class CircleOnlineApp {
         }
 
         this.updatePreview();
+        this.loadDispatcherConfig();
     }
 
     setField(id, value) {
@@ -501,6 +503,56 @@ class CircleOnlineApp {
         } catch (error) {
             if (error.message !== 'Unauthorized') {
                 this.showToast('保存失败: ' + error.message, 'error');
+            }
+        }
+    }
+
+    // ── Dispatcher Preset ──
+    selectDispatcherPreset(presetKey) {
+        this._selectedDispatcherPreset = presetKey;
+        document.querySelectorAll('.preset-card').forEach(card => {
+            card.classList.toggle('selected', card.dataset.preset === presetKey);
+        });
+    }
+
+    async saveDispatcherConfig() {
+        const dispatcherEnabled = document.getElementById('cfg-dispatcher_enabled')?.checked;
+        const customPrompt = this.getField('cfg-dispatcher_prompt');
+        const payload = {
+            enabled: dispatcherEnabled,
+            dispatcher_preset: this._selectedDispatcherPreset,
+            dispatcher_prompt: customPrompt || '',
+        };
+
+        try {
+            const response = await this.authedFetch(`${API_BASE}/api/dispatcher/config`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (!response.ok) throw new Error('Save failed');
+            const data = await response.json();
+            this.showToast(data.message || '调度器配置已保存', 'success');
+        } catch (error) {
+            if (error.message !== 'Unauthorized') {
+                this.showToast('保存失败: ' + error.message, 'error');
+            }
+        }
+    }
+
+    async loadDispatcherConfig() {
+        try {
+            const response = await this.authedFetch(`${API_BASE}/api/dispatcher/config`);
+            if (!response.ok) throw new Error('Failed to fetch');
+            const data = await response.json();
+            this._selectedDispatcherPreset = data.dispatcher_preset || 'balanced';
+            this.selectDispatcherPreset(this._selectedDispatcherPreset);
+            this.setField('cfg-dispatcher_prompt', data.dispatcher_prompt);
+            const dispatcherEnabled = document.getElementById('cfg-dispatcher_enabled');
+            if (dispatcherEnabled) dispatcherEnabled.checked = data.enabled;
+        } catch (error) {
+            if (error.message !== 'Unauthorized') {
+                console.error('Load dispatcher config error:', error);
             }
         }
     }

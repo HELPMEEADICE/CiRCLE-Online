@@ -282,6 +282,83 @@
                                 </div>
                             </div>
                         </div>
+
+                        <div class="settings-card">
+                            <div class="settings-card-header">
+                                <span class="material-icons-round">tune</span>
+                                <div>
+                                    <h3>调度器积极性</h3>
+                                    <p class="settings-subtitle">控制 AI 调度器回复的积极性程度</p>
+                                </div>
+                            </div>
+                            <div class="settings-body">
+                                <div class="dispatcher-presets" id="dispatcherPresets">
+                                    <div class="preset-card" data-preset="silent" onclick="app.selectDispatcherPreset('silent')">
+                                        <div class="preset-header">
+                                            <span class="material-icons-round">notifications_off</span>
+                                            <span class="preset-name">静默</span>
+                                        </div>
+                                        <p class="preset-desc">仅响应直接@和明确提到角色名的消息</p>
+                                        <div class="preset-check"><span class="material-icons-round">check_circle</span></div>
+                                    </div>
+                                    <div class="preset-card" data-preset="conservative" onclick="app.selectDispatcherPreset('conservative')">
+                                        <div class="preset-header">
+                                            <span class="material-icons-round">volume_mute</span>
+                                            <span class="preset-name">保守</span>
+                                        </div>
+                                        <p class="preset-desc">倾向于沉默，仅在话题明显相关时回复</p>
+                                        <div class="preset-check"><span class="material-icons-round">check_circle</span></div>
+                                    </div>
+                                    <div class="preset-card" data-preset="balanced" onclick="app.selectDispatcherPreset('balanced')">
+                                        <div class="preset-header">
+                                            <span class="material-icons-round">volume_down</span>
+                                            <span class="preset-name">平衡</span>
+                                        </div>
+                                        <p class="preset-desc">适度参与对话，平衡活跃度与克制</p>
+                                        <div class="preset-check"><span class="material-icons-round">check_circle</span></div>
+                                    </div>
+                                    <div class="preset-card" data-preset="active" onclick="app.selectDispatcherPreset('active')">
+                                        <div class="preset-header">
+                                            <span class="material-icons-round">volume_up</span>
+                                            <span class="preset-name">积极</span>
+                                        </div>
+                                        <p class="preset-desc">主动参与对话，乐于接话和互动</p>
+                                        <div class="preset-check"><span class="material-icons-round">check_circle</span></div>
+                                    </div>
+                                    <div class="preset-card" data-preset="enthusiastic" onclick="app.selectDispatcherPreset('enthusiastic')">
+                                        <div class="preset-header">
+                                            <span class="material-icons-round">campaign</span>
+                                            <span class="preset-name">热情</span>
+                                        </div>
+                                        <p class="preset-desc">非常积极活跃，几乎不放过任何对话机会</p>
+                                        <div class="preset-check"><span class="material-icons-round">check_circle</span></div>
+                                    </div>
+                                </div>
+                                <div class="md3-field" style="margin-top:16px">
+                                    <label class="md3-label">自定义调度器提示词</label>
+                                    <textarea class="md3-textarea" id="cfg-dispatcher_prompt" rows="6" placeholder="留空则使用上方选择的预设提示词。自定义提示词可使用 {characters_info} {message_count} {recent_messages} {chat_state} 变量。"></textarea>
+                                    <span class="md3-helper">留空使用预设，填写后将覆盖预设提示词。热切换生效，无需重启。</span>
+                                </div>
+                                <div class="md3-field">
+                                    <div class="md3-switch-row">
+                                        <div>
+                                            <label class="md3-label">启用调度器</label>
+                                            <span class="md3-helper" style="margin-top:4px">关闭后将使用简单的关键词+概率匹配</span>
+                                        </div>
+                                        <label class="md3-switch">
+                                            <input type="checkbox" id="cfg-dispatcher_enabled">
+                                            <span class="slider"></span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="settings-actions">
+                                    <button class="md3-btn md3-btn-filled" onclick="app.saveDispatcherConfig()">
+                                        <span class="material-icons-round">save</span>
+                                        保存调度器配置
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 

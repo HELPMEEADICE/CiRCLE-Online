@@ -33,8 +33,8 @@ class DispatcherDecision:
     chat_state: str = "active"  # "active" | "winding_down" | "terminated"
 
 
-# 辅助模型分析 Prompt
-DISPATCHER_PROMPT = """你是一个群聊消息分析助手，负责决定如何响应群聊消息。
+# ── 调度器提示词模板 ──
+_DISPATCHER_PROMPT_TEMPLATE = """你是一个群聊消息分析助手，负责决定如何响应群聊消息。
 
 ## 可用角色及其人设摘要
 {characters_info}
@@ -107,10 +107,8 @@ terminate 时：
 - **winding_down**: 对话接近尾声（如有人说了"先这样"），谨慎回复，避免开启新话题
 - **terminated**: 对话已结束，不再回复，等待新消息重置为 active
 
-## 重要原则
-- 宁可少回复，也不要刷屏
-- 当不确定是否应该回复时，选择 skip
-- 对话自然结束时，主动 terminate 比被动停止更好
+## 核心回复倾向
+{enthusiasm_instruction}
 
 ## 可用工具说明
 1. set_group_ban - 禁言用户
@@ -121,6 +119,111 @@ terminate 时：
    - 参数：message_id(消息ID), emoji_id(表情ID)
    - 可用表情：128027(🐛下头)、128053(🐵无语)、128051(🐳喜欢)
 """
+
+
+# ── 5个积极性预设 ──
+DISPATCHER_PRESETS: dict[str, dict] = {
+    "silent": {
+        "name": "静默",
+        "description": "仅响应直接@和明确提到角色名的消息，几乎不主动发言",
+        "fallback_reply_probability": 0.01,
+        "enthusiasm_instruction": (
+            "你极度克制，几乎从不主动回复。\n"
+            "- 只有当消息中明确@了某个角色，或直接提到了角色全名时，才选择 reply\n"
+            "- 任何其他情况一律选择 skip，即使话题与角色相关\n"
+            "- 宁可错过也不要多说\n"
+            "- chain 几乎不会用到，只在极端情况下（多人同时@不同角色）才考虑"
+        ),
+    },
+    "conservative": {
+        "name": "保守",
+        "description": "倾向于沉默，仅在话题明显相关时回复",
+        "fallback_reply_probability": 0.15,
+        "enthusiasm_instruction": (
+            "你偏向沉默，只在确实有必要时才回复。\n"
+            "- 被@或角色名被提及时必须回复\n"
+            "- 话题与角色人设高度相关时可以回复\n"
+            "- 普通闲聊、话题模糊、已有其他角色回复时选择 skip\n"
+            "- 当不确定是否应该回复时，选择 skip\n"
+            "- chain 最多1-2个角色"
+        ),
+    },
+    "balanced": {
+        "name": "平衡",
+        "description": "适度参与对话，平衡活跃度与克制",
+        "fallback_reply_probability": 0.3,
+        "enthusiasm_instruction": (
+            "你适度参与群聊。\n"
+            "- 被@或角色名被提及时必须回复\n"
+            "- 话题与角色相关时积极回复\n"
+            "- 有趣的话题也可以适当参与\n"
+            "- 但不要每条消息都回复，留出空间\n"
+            "- 宁可少回复，也不要刷屏\n"
+            "- 当不确定是否应该回复时，选择 skip"
+        ),
+    },
+    "active": {
+        "name": "积极",
+        "description": "主动参与对话，乐于接话和互动",
+        "fallback_reply_probability": 0.5,
+        "enthusiasm_instruction": (
+            "你乐于参与群聊，喜欢和大家互动。\n"
+            "- 被@或角色名被提及时必须回复\n"
+            "- 大部分话题都可以参与，尤其是有趣的、有梗的对话\n"
+            "- 即使没有被直接提到，也可以自然地接话\n"
+            "- 可以适当使用 chain 让多个角色参与讨论\n"
+            "- 但仍然要注意不要连续刷屏，给其他人留空间"
+        ),
+    },
+    "enthusiastic": {
+        "name": "热情",
+        "description": "非常积极活跃，几乎不放过任何对话机会",
+        "fallback_reply_probability": 0.8,
+        "enthusiasm_instruction": (
+            "你非常热情，积极回应每一条消息。\n"
+            "- 被@或角色名被提及时必须回复\n"
+            "- 几乎所有话题都要参与，展现角色个性\n"
+            "- 主动接话、调侃、关心，让群聊充满活力\n"
+            "- 积极使用 chain 让多个角色互动\n"
+            "- 只有在对话明显结束（晚安、再见等）时才 terminate\n"
+            "- 即使话题不太相关，也可以用轻松的方式参与"
+        ),
+    },
+}
+
+
+def get_dispatcher_prompt(characters_info: str, message_count: int,
+                          recent_messages: str, chat_state: str) -> str:
+    """根据配置构建调度器提示词"""
+    custom_prompt = config.orchestrator.dispatcher.dispatcher_prompt
+    preset_key = config.orchestrator.dispatcher.dispatcher_preset
+
+    if custom_prompt:
+        # 用户自定义提示词：直接使用（只做变量替换）
+        return custom_prompt.format(
+            characters_info=characters_info,
+            message_count=message_count,
+            recent_messages=recent_messages,
+            chat_state=chat_state,
+        )
+
+    # 使用预设
+    preset = DISPATCHER_PRESETS.get(preset_key, DISPATCHER_PRESETS["balanced"])
+    return _DISPATCHER_PROMPT_TEMPLATE.format(
+        characters_info=characters_info,
+        message_count=message_count,
+        recent_messages=recent_messages,
+        chat_state=chat_state,
+        enthusiasm_instruction=preset["enthusiasm_instruction"],
+    )
+
+
+def get_preset_fallback_probability(preset_key: str) -> float:
+    """获取预设的 fallback 回复概率"""
+    preset = DISPATCHER_PRESETS.get(preset_key)
+    if preset:
+        return preset["fallback_reply_probability"]
+    return config.orchestrator.dispatcher.fallback_reply_probability
 
 
 # 终止关键词
@@ -202,7 +305,7 @@ class Dispatcher:
         messages_text = "\n".join(recent_messages)
         
         # 构建完整 prompt
-        prompt = DISPATCHER_PROMPT.format(
+        prompt = get_dispatcher_prompt(
             characters_info=characters_text,
             message_count=len(messages),
             recent_messages=messages_text,
@@ -365,8 +468,11 @@ class Dispatcher:
                 )
                 return
         
-        # 概率判断
-        if random.random() < config.orchestrator.dispatcher.fallback_reply_probability:
+        # 概率判断（使用预设的 fallback 概率）
+        fallback_prob = get_preset_fallback_probability(
+            config.orchestrator.dispatcher.dispatcher_preset
+        )
+        if random.random() < fallback_prob:
             if self._available_characters:
                 char = random.choice(self._available_characters)
                 await orchestrator.execute_reply(

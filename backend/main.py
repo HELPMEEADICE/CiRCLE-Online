@@ -380,6 +380,15 @@ async def get_config():
                 "reserve_recent": cfg.orchestrator.context_compression.reserve_recent,
                 "model": cfg.orchestrator.context_compression.model,
             },
+            "dispatcher": {
+                "enabled": cfg.orchestrator.dispatcher.enabled,
+                "fallback_to_simple": cfg.orchestrator.dispatcher.fallback_to_simple,
+                "fallback_reply_probability": cfg.orchestrator.dispatcher.fallback_reply_probability,
+                "assistant_max_tokens": cfg.orchestrator.dispatcher.assistant_max_tokens,
+                "assistant_temperature": cfg.orchestrator.dispatcher.assistant_temperature,
+                "dispatcher_preset": cfg.orchestrator.dispatcher.dispatcher_preset,
+                "dispatcher_prompt": cfg.orchestrator.dispatcher.dispatcher_prompt,
+            },
         },
         "chat": {
             "admin_qq": cfg.chat.admin_qq,
@@ -649,6 +658,80 @@ async def update_chat_config(update: ChatConfigUpdate):
     config.logging.__dict__.update(current.logging.__dict__)
 
     return {"success": True, "message": "聊天配置已保存"}
+
+
+class DispatcherConfigUpdate(BaseModel):
+    """分配器配置更新"""
+    enabled: bool = None
+    fallback_to_simple: bool = None
+    fallback_reply_probability: float = None
+    assistant_max_tokens: int = None
+    assistant_temperature: float = None
+    dispatcher_preset: str = None
+    dispatcher_prompt: str = None
+
+
+@app.get("/api/dispatcher/config")
+async def get_dispatcher_config():
+    """获取分配器配置"""
+    cfg = load_config()
+    from backend.dispatcher import DISPATCHER_PRESETS
+    return {
+        "enabled": cfg.orchestrator.dispatcher.enabled,
+        "fallback_to_simple": cfg.orchestrator.dispatcher.fallback_to_simple,
+        "fallback_reply_probability": cfg.orchestrator.dispatcher.fallback_reply_probability,
+        "assistant_max_tokens": cfg.orchestrator.dispatcher.assistant_max_tokens,
+        "assistant_temperature": cfg.orchestrator.dispatcher.assistant_temperature,
+        "dispatcher_preset": cfg.orchestrator.dispatcher.dispatcher_preset,
+        "dispatcher_prompt": cfg.orchestrator.dispatcher.dispatcher_prompt,
+        "presets": {
+            k: {"name": v["name"], "description": v["description"]}
+            for k, v in DISPATCHER_PRESETS.items()
+        },
+    }
+
+
+@app.post("/api/dispatcher/config")
+async def update_dispatcher_config(update: DispatcherConfigUpdate):
+    """更新分配器配置"""
+    current = load_config()
+
+    if update.enabled is not None:
+        current.orchestrator.dispatcher.enabled = update.enabled
+    if update.fallback_to_simple is not None:
+        current.orchestrator.dispatcher.fallback_to_simple = update.fallback_to_simple
+    if update.fallback_reply_probability is not None:
+        current.orchestrator.dispatcher.fallback_reply_probability = update.fallback_reply_probability
+    if update.assistant_max_tokens is not None:
+        current.orchestrator.dispatcher.assistant_max_tokens = update.assistant_max_tokens
+    if update.assistant_temperature is not None:
+        current.orchestrator.dispatcher.assistant_temperature = update.assistant_temperature
+    if update.dispatcher_preset is not None:
+        current.orchestrator.dispatcher.dispatcher_preset = update.dispatcher_preset
+    if update.dispatcher_prompt is not None:
+        current.orchestrator.dispatcher.dispatcher_prompt = update.dispatcher_prompt
+
+    save_config(current)
+    config.orchestrator.dispatcher.__dict__.update(current.orchestrator.dispatcher.__dict__)
+
+    return {"success": True, "message": "调度器配置已保存"}
+
+
+@app.get("/api/dispatcher/presets")
+async def get_dispatcher_presets():
+    """获取所有调度器预设"""
+    from backend.dispatcher import DISPATCHER_PRESETS
+    return {
+        "presets": {
+            k: {
+                "name": v["name"],
+                "description": v["description"],
+                "fallback_reply_probability": v["fallback_reply_probability"],
+            }
+            for k, v in DISPATCHER_PRESETS.items()
+        },
+        "current_preset": config.orchestrator.dispatcher.dispatcher_preset,
+    }
 
 
 @app.get("/api/dispatcher/status")

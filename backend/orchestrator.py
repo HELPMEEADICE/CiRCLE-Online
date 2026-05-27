@@ -367,6 +367,33 @@ _EMOJI_TOOL = [{
     },
 }]
 
+_ANALYZE_IMAGE_TOOL = [{
+    "type": "function",
+    "function": {
+        "name": "analyze_image",
+        "description": (
+            "解析图片内容。当你看到消息中有图片但无法理解其内容时使用此工具。"
+            "图片会以[图片:文件名]的形式出现在消息中。"
+            "使用此工具可以获取图片的详细描述，包括表情包文字、人物表情、动作等信息。"
+            "注意：此工具是异步执行的，解析结果会在后续消息中自动注入。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "image_url": {
+                    "type": "string",
+                    "description": "要解析的图片URL",
+                },
+                "message_id": {
+                    "type": "integer",
+                    "description": "图片所在消息的ID，用于将解析结果关联到正确的消息",
+                },
+            },
+            "required": ["image_url", "message_id"],
+        },
+    },
+}]
+
 
 def _build_live_context_reply_prompt(trigger_message: str) -> str:
     return (
@@ -495,16 +522,14 @@ class Orchestrator:
             return
 
         image_urls = extract_image_urls(message_segments)
-        vision_text = ""
-        if image_urls and config.llm.vision.enabled and llm_client.is_vision_available:
-            vision_descriptions = []
-            for url in image_urls:
-                desc = await llm_client.analyze_image(url)
-                if desc:
-                    vision_descriptions.append(desc)
-            if vision_descriptions:
-                vision_text = " ".join(vision_descriptions)
-
+        
+        # 构建图片占位符信息
+        image_placeholders = []
+        for i, url in enumerate(image_urls):
+            # 从URL中提取文件名
+            filename = url.split("/")[-1].split("?")[0] if url else f"图片{i+1}"
+            image_placeholders.append(f"[图片:{filename}]")
+        
         sender = data.get("sender", {})
         sender_name = sender.get("card", "") or sender.get("nickname", "")
 
@@ -533,19 +558,21 @@ class Orchestrator:
         display_content = f"[{sender_name}]: {processed_message}"
         if is_bot:
             display_content = f"[Poppin'Party成员] {sender_name}: {processed_message}"
-        if vision_text:
-            display_content = f"{display_content} [图片内容: {vision_text}]"
+        if image_placeholders:
+            display_content = f"{display_content} {' '.join(image_placeholders)}"
         display_content = f"{display_content} [message_id={message_id}]"
 
+        # 存储图片URL到ChatMessage，供后续工具调用使用
         await session.add(ChatMessage(
             role="user",
             content=display_content,
             raw_content=processed_message,
-            vision_content=vision_text or None,
+            vision_content=None,  # 不再自动调用vision模型
             qq_id=user_id,
             character=bot_character if is_bot else None,
             is_bot=is_bot,
             sender_name=sender_name,
+            image_urls=image_urls if image_urls else None,
         ))
 
         if not should_reply:
@@ -568,13 +595,13 @@ class Orchestrator:
             context=context,
             user_message=_build_live_context_reply_prompt(processed_message),
             character_name=character_name,
-            tools=_BAN_TOOL + _EMOJI_TOOL,
+            tools=_BAN_TOOL + _EMOJI_TOOL + _ANALYZE_IMAGE_TOOL,
         )
 
         if response:
             tool_results = []
             if response.tool_calls:
-                tool_results = await self._execute_tool_calls(response.tool_calls, group_id, port)
+                tool_results = await self._execute_tool_calls(response.tool_calls, group_id, port, is_private=False)
 
             reply_text = response.content
             if tool_results and not reply_text:
@@ -616,28 +643,28 @@ class Orchestrator:
             return
 
         image_urls = extract_image_urls(message_segments)
-        vision_text = ""
-        if image_urls and config.llm.vision.enabled and llm_client.is_vision_available:
-            vision_descriptions = []
-            for url in image_urls:
-                desc = await llm_client.analyze_image(url)
-                if desc:
-                    vision_descriptions.append(desc)
-            if vision_descriptions:
-                vision_text = " ".join(vision_descriptions)
-
+        
+        # 构建图片占位符信息
+        image_placeholders = []
+        for i, url in enumerate(image_urls):
+            # 从URL中提取文件名
+            filename = url.split("/")[-1].split("?")[0] if url else f"图片{i+1}"
+            image_placeholders.append(f"[图片:{filename}]")
+        
         session = await self._get_private_session(user_id, character_name)
         display_content = raw_message
-        if vision_text:
-            display_content = f"{raw_message} [图片内容: {vision_text}]" if raw_message.strip() else f"[图片内容: {vision_text}]"
-
+        if image_placeholders:
+            display_content = f"{raw_message} {' '.join(image_placeholders)}" if raw_message.strip() else ' '.join(image_placeholders)
+        
+        # 存储图片URL到ChatMessage，供后续工具调用使用
         await session.add(ChatMessage(
             role="user",
             content=display_content,
             raw_content=raw_message,
-            vision_content=vision_text or None,
+            vision_content=None,  # 不再自动调用vision模型
             qq_id=user_id,
             character=character_name,
+            image_urls=image_urls if image_urls else None,
         ))
 
         system_prompt = character_manager.get_system_prompt(character_name)
@@ -654,16 +681,28 @@ class Orchestrator:
             context=context,
             user_message=raw_message,
             character_name=character_name,
+            tools=_BAN_TOOL + _EMOJI_TOOL + _ANALYZE_IMAGE_TOOL,
         )
 
-        if response and response.content:
-            await session.add(ChatMessage(
-                role="assistant",
-                content=response.content,
-                character=character_name,
-            ))
+        if response:
+            tool_results = []
+            if response.tool_calls:
+                tool_results = await self._execute_tool_calls(response.tool_calls, "private", port, is_private=True)
 
-            await self._send_private_reply(port, user_id, response.content)
+            reply_text = response.content
+            if tool_results and not reply_text:
+                non_emoji_results = [r for r in tool_results if not r.startswith("[set_msg_emoji_like]")]
+                if non_emoji_results:
+                    reply_text = non_emoji_results[0]
+
+            if reply_text:
+                await session.add(ChatMessage(
+                    role="assistant",
+                    content=reply_text,
+                    character=character_name,
+                ))
+
+                await self._send_private_reply(port, user_id, reply_text)
 
     def _should_reply(self, message: str, character_name: str, qq_name_map: dict[str, str] = None) -> bool:
         if f"@{character_name}" in message:
@@ -685,7 +724,7 @@ class Orchestrator:
 
         return random.random() < config.orchestrator.group_reply_probability
 
-    async def _execute_tool_calls(self, tool_calls, group_id: str, port: int) -> list[str]:
+    async def _execute_tool_calls(self, tool_calls, group_id: str, port: int, is_private: bool = False) -> list[str]:
         results = []
         for tc in tool_calls:
             if tc.function_name == "set_group_ban":
@@ -770,9 +809,59 @@ class Orchestrator:
                         else:
                             results.append(f"[set_msg_emoji_like] 执行异常: {e}")
                             logger.error(f"[EMOJI ERROR] message={msg_id} emoji={emoji_id} error={e}")
+            elif tc.function_name == "analyze_image":
+                image_url = tc.arguments.get("image_url", "")
+                message_id = tc.arguments.get("message_id", 0)
+                if not image_url:
+                    results.append(f"[analyze_image] 缺少image_url参数")
+                    continue
+                # 异步执行图片分析，不阻塞当前回复
+                asyncio.create_task(self._analyze_image_async(image_url, message_id, group_id, is_private=is_private))
+                results.append(f"[analyze_image] 已开始异步解析图片，结果将自动注入到会话中")
+                logger.info(f"[IMAGE ANALYSIS] Started async analysis for image: {image_url}")
             else:
                 results.append(f"[{tc.function_name}] 未知的工具调用")
         return results
+
+    async def _analyze_image_async(self, image_url: str, message_id: int, group_id: str, is_private: bool = False):
+        """异步执行图片分析，并将结果注入到会话中"""
+        from backend.llm_client import llm_client
+        
+        try:
+            # 检查vision是否可用
+            if not config.llm.vision.enabled or not llm_client.is_vision_available:
+                logger.debug(f"[IMAGE ANALYSIS] Vision not available, skipping: {image_url}")
+                return
+            
+            # 执行图片分析
+            desc = await llm_client.analyze_image(image_url)
+            if not desc:
+                logger.debug(f"[IMAGE ANALYSIS] No description returned for: {image_url}")
+                return
+            
+            # 获取会话并注入结果
+            if is_private:
+                # 对于私聊，group_id实际上是user_id
+                session = await self._get_private_session(group_id, "default")
+            else:
+                session = await self._get_group_session(group_id)
+            
+            # 查找包含该图片的消息并更新vision_content
+            # 由于我们无法直接修改已存储的ChatMessage，我们添加一条系统消息来注入图片描述
+            image_filename = image_url.split("/")[-1].split("?")[0] if image_url else "未知图片"
+            injection_message = f"[图片解析结果] {image_filename}: {desc}"
+            
+            # 添加到会话中，标记为系统消息
+            await session.add(ChatMessage(
+                role="system",
+                content=injection_message,
+                vision_content=desc,
+            ))
+            
+            logger.info(f"[IMAGE ANALYSIS] Completed for {image_filename}: {desc[:50]}...")
+            
+        except Exception as e:
+            logger.error(f"[IMAGE ANALYSIS] Error analyzing image {image_url}: {e}")
 
     def _find_port_for_character(self, character_name: str) -> Optional[int]:
         for p, c in self._assignments.items():
@@ -797,23 +886,19 @@ class Orchestrator:
             bot_character = self.get_character_by_qq_id(msg.user_id)
             is_bot = bot_character is not None
             
-            # 图片分析（如果需要）
-            vision_text = ""
-            if msg.image_urls and config.llm.vision.enabled and llm_client.is_vision_available:
-                vision_descriptions = []
-                for url in msg.image_urls:
-                    desc = await llm_client.analyze_image(url)
-                    if desc:
-                        vision_descriptions.append(desc)
-                if vision_descriptions:
-                    vision_text = " ".join(vision_descriptions)
+            # 构建图片占位符信息
+            image_placeholders = []
+            for i, url in enumerate(msg.image_urls):
+                # 从URL中提取文件名
+                filename = url.split("/")[-1].split("?")[0] if url else f"图片{i+1}"
+                image_placeholders.append(f"[图片:{filename}]")
             
             # 构建显示内容
             display_content = f"[{msg.sender_name}]: {msg.raw_message}"
             if is_bot:
                 display_content = f"[Poppin'Party成员] {bot_character}: {msg.raw_message}"
-            if vision_text:
-                display_content = f"{display_content} [图片内容: {vision_text}]"
+            if image_placeholders:
+                display_content = f"{display_content} {' '.join(image_placeholders)}"
             display_content = f"{display_content} [message_id={msg.data.get('message_id', 0)}]"
             
             # 记录到 SessionMemory
@@ -821,11 +906,12 @@ class Orchestrator:
                 role="user",
                 content=display_content,
                 raw_content=msg.raw_message,
-                vision_content=vision_text or None,
+                vision_content=None,  # 不再自动调用vision模型
                 qq_id=msg.user_id,
                 character=bot_character if is_bot else None,
                 is_bot=is_bot,
                 sender_name=msg.sender_name,
+                image_urls=msg.image_urls if msg.image_urls else None,
             ))
         
         logger.info(f"Recorded {len(messages)} messages for group {group_id}")
@@ -874,13 +960,13 @@ class Orchestrator:
             context=context,
             user_message=trigger_hint,
             character_name=character_name,
-            tools=_BAN_TOOL + _EMOJI_TOOL,
+            tools=_BAN_TOOL + _EMOJI_TOOL + _ANALYZE_IMAGE_TOOL,
         )
         
         if response:
             tool_results = []
             if response.tool_calls:
-                tool_results = await self._execute_tool_calls(response.tool_calls, group_id, port)
+                tool_results = await self._execute_tool_calls(response.tool_calls, group_id, port, is_private=False)
             
             reply_text = response.content
             if tool_results and not reply_text:
