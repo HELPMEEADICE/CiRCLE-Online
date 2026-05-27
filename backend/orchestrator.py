@@ -363,10 +363,6 @@ _BAN_TOOL = [{
         "parameters": {
             "type": "object",
             "properties": {
-                "group_id": {
-                    "type": "string",
-                    "description": "群号",
-                },
                 "user_id": {
                     "type": "string",
                     "description": "要禁言的用户QQ号",
@@ -377,7 +373,7 @@ _BAN_TOOL = [{
                     "default": 600,
                 },
             },
-            "required": ["group_id", "user_id"],
+            "required": ["user_id"],
         },
     },
 }]
@@ -771,7 +767,7 @@ class Orchestrator:
         results = []
         for tc in tool_calls:
             if tc.function_name == "set_group_ban":
-                target_group = tc.arguments.get("group_id", group_id)
+                target_group = config.chat.main_group_id
                 target_user = tc.arguments.get("user_id", "")
                 duration = int(tc.arguments.get("duration", 600))
                 if not target_user:
