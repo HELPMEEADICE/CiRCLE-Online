@@ -327,6 +327,84 @@ async def test_orchestrator_translates_emoji_message_id_to_action_port():
     assert sent_actions == [("set_msg_emoji_like", {"message_id": 105, "emoji_id": "128051"}, 30.0)]
 
 
+def test_orchestrator_sanitizes_emoji_tool_narration():
+    from backend.llm_client import ToolCall
+    from backend.orchestrator import Orchestrator
+
+    orchestrator = Orchestrator()
+    tool_calls = [
+        ToolCall(
+            id="call_1",
+            function_name="set_msg_emoji_like",
+            arguments={"message_id": 101, "emoji_id": "128051"},
+        )
+    ]
+
+    assert orchestrator._sanitize_reply_text("给你点个🐳", tool_calls) == ""
+    assert orchestrator._sanitize_reply_text("好耶", tool_calls) == "好耶"
+
+
+@pytest.mark.asyncio
+async def test_execute_reply_generates_text_after_emoji_only_tool_call(monkeypatch):
+    from backend.llm_client import RoleplayResponse, ToolCall
+    import backend.character_manager as character_manager_module
+    import backend.llm_client as llm_client_module
+    from backend.orchestrator import Orchestrator
+
+    sent_replies = []
+    saved_messages = []
+    llm_calls = []
+
+    class FakeSession:
+        session_key = "group_1107527508"
+
+        def get_context_for_character(self, character_name, bot_qq_map):
+            return []
+
+        async def add(self, message):
+            saved_messages.append(message.content)
+
+    orchestrator = Orchestrator()
+    orchestrator._assignments = {8081: "户山香澄"}
+
+    async def fake_get_group_session(group_id):
+        return FakeSession()
+
+    async def fake_send_reply(port, group_id, reply_text):
+        sent_replies.append((port, group_id, reply_text))
+
+    async def fake_execute_tool_calls(tool_calls, group_id, port, is_private=False, context_message_id=0):
+        return ["[set_msg_emoji_like] 已添加表情回应 🐳"]
+
+    async def fake_generate_roleplay_response(character_prompt, context, user_message, character_name="", tools=None):
+        llm_calls.append(tools)
+        if len(llm_calls) == 1:
+            return RoleplayResponse(
+                content="给你点个🐳",
+                tool_calls=[
+                    ToolCall(
+                        id="call_1",
+                        function_name="set_msg_emoji_like",
+                        arguments={"message_id": 101, "emoji_id": "128051"},
+                    )
+                ],
+            )
+        return RoleplayResponse(content="来了", tool_calls=[])
+
+    monkeypatch.setattr(character_manager_module.character_manager, "get_system_prompt", lambda _: "你是户山香澄")
+    monkeypatch.setattr(llm_client_module.llm_client, "generate_roleplay_response", fake_generate_roleplay_response)
+    monkeypatch.setattr(orchestrator, "_get_group_session", fake_get_group_session)
+    monkeypatch.setattr(orchestrator, "_send_reply", fake_send_reply)
+    monkeypatch.setattr(orchestrator, "_execute_tool_calls", fake_execute_tool_calls)
+
+    await orchestrator.execute_reply("1107527508", "户山香澄", trigger_message=None)
+
+    assert sent_replies == [(8081, "1107527508", "来了")]
+    assert saved_messages == ["来了"]
+    assert llm_calls[0] is not None
+    assert llm_calls[1] is None
+
+
 @pytest.mark.asyncio
 async def test_napcat_handler_deduplicates_same_image_with_different_urls():
     from backend.napcat_handler import NapCatMessageHandler

@@ -390,9 +390,10 @@ _EMOJI_TOOL = [{
     "function": {
         "name": "set_msg_emoji_like",
         "description": (
-            "给当前对话中的消息添加QQ表情回应。积极使用这个工具来表达你的态度！"
+            "给当前对话中的消息添加QQ表情回应。这个工具只能作为附加动作，不能代替正常文字回复。"
+            "如果用户是在和你说话、问你问题、点你名、或当前最自然的行为是回一句话，你仍然必须正常发文字消息。"
             "觉得消息很下头、无聊、离谱用🐛(128027)，无语、震惊、无奈用🐵(128053)，喜欢、赞同、开心用🐳(128051)。"
-            "只要消息有任何情绪波动就用，尽量多用，让聊天更生动。"
+            "调用后不要在正文里描述你点了什么表情，只输出真正要发出去的话。"
             "可用表情ID：128027(🐛下头)、128053(🐵无语)、128051(🐳喜欢)"
         ),
         "parameters": {
@@ -688,11 +689,17 @@ class Orchestrator:
                 self._remember_message_id_aliases(group_id, data.get("_message_ids_by_port"), port, message_id)
                 tool_results = await self._execute_tool_calls(response.tool_calls, group_id, port, is_private=False, context_message_id=message_id)
 
-            reply_text = response.content
-            if tool_results and not reply_text:
-                non_emoji_results = [r for r in tool_results if not r.startswith("[set_msg_emoji_like]")]
-                if non_emoji_results:
-                    reply_text = non_emoji_results[0]
+            reply_text = await self._resolve_group_reply_text(
+                response=response,
+                tool_results=tool_results,
+                group_id=group_id,
+                activity_version=activity_version,
+                stale_reason=f"after {character_name} emoji followup",
+                system_prompt=system_prompt,
+                context=context,
+                user_message=_build_live_context_reply_prompt(processed_message),
+                character_name=character_name,
+            )
 
             if reply_text:
                 await session.add(ChatMessage(
@@ -774,7 +781,7 @@ class Orchestrator:
             if response.tool_calls:
                 tool_results = await self._execute_tool_calls(response.tool_calls, "private", port, is_private=True)
 
-            reply_text = response.content
+            reply_text = self._sanitize_reply_text(response.content, response.tool_calls)
             if tool_results and not reply_text:
                 non_emoji_results = [r for r in tool_results if not r.startswith("[set_msg_emoji_like]")]
                 if non_emoji_results:
@@ -839,6 +846,93 @@ class Orchestrator:
         if aliases:
             return aliases.get(port, int(message_id))
         return int(message_id)
+
+    @staticmethod
+    def _has_only_emoji_tool_calls(tool_calls) -> bool:
+        return bool(tool_calls) and all(tc.function_name == "set_msg_emoji_like" for tc in tool_calls)
+
+    def _sanitize_reply_text(self, reply_text: Optional[str], tool_calls) -> str:
+        if not reply_text:
+            return ""
+
+        sanitized = reply_text.strip()
+        if not sanitized or not self._has_only_emoji_tool_calls(tool_calls):
+            return sanitized
+
+        if "set_msg_emoji_like" in sanitized.lower():
+            return ""
+
+        tool_narration_patterns = [
+            r"^(?:我|给你|给这条消息|这条消息)?(?:点|回|加|送)(?:了)?(?:个|一个)?[🐛🐵🐳].*$",
+            r"^.*(?:表情回应|表情回复|回复表情|点了个表情|回了个表情).*$",
+            r"^.*(?:用|拿)[🐛🐵🐳](?:来|去)?(?:回应|回复).*$",
+        ]
+        for pattern in tool_narration_patterns:
+            if re.match(pattern, sanitized):
+                return ""
+
+        return sanitized
+
+    async def _generate_followup_text_reply(
+        self,
+        *,
+        group_id: str,
+        activity_version: int,
+        stale_reason: str,
+        system_prompt: str,
+        context: list[ChatMessage],
+        user_message: str,
+        character_name: str,
+    ) -> str:
+        from backend.llm_client import llm_client
+
+        followup = await llm_client.generate_roleplay_response(
+            character_prompt=(
+                f"{system_prompt}\n\n"
+                "[额外规则] 你刚刚已经通过工具表达了态度，现在必须补一条真正发送到群里的纯文本消息。"
+                "不要描述你点了什么表情，不要输出工具，不要输出动作说明，只输出消息正文。"
+            ),
+            context=context,
+            user_message=user_message,
+            character_name=character_name,
+        )
+        if not self._is_group_activity_current(group_id, activity_version, stale_reason):
+            return ""
+        if not followup:
+            return ""
+        return self._sanitize_reply_text(followup.content, [])
+
+    async def _resolve_group_reply_text(
+        self,
+        *,
+        response: RoleplayResponse,
+        tool_results: list[str],
+        group_id: str,
+        activity_version: int,
+        stale_reason: str,
+        system_prompt: str,
+        context: list[ChatMessage],
+        user_message: str,
+        character_name: str,
+    ) -> str:
+        reply_text = self._sanitize_reply_text(response.content, response.tool_calls)
+        if tool_results and not reply_text:
+            non_emoji_results = [r for r in tool_results if not r.startswith("[set_msg_emoji_like]")]
+            if non_emoji_results:
+                reply_text = non_emoji_results[0]
+
+        if reply_text or not self._has_only_emoji_tool_calls(response.tool_calls):
+            return reply_text
+
+        return await self._generate_followup_text_reply(
+            group_id=group_id,
+            activity_version=activity_version,
+            stale_reason=stale_reason,
+            system_prompt=system_prompt,
+            context=context,
+            user_message=user_message,
+            character_name=character_name,
+        )
 
     async def _execute_tool_calls(self, tool_calls, group_id: str, port: int, is_private: bool = False, context_message_id: int = 0) -> list[str]:
         results = []
@@ -1096,12 +1190,18 @@ class Orchestrator:
             tool_results = []
             if response.tool_calls:
                 tool_results = await self._execute_tool_calls(response.tool_calls, group_id, port, is_private=False)
-            
-            reply_text = response.content
-            if tool_results and not reply_text:
-                non_emoji_results = [r for r in tool_results if not r.startswith("[set_msg_emoji_like]")]
-                if non_emoji_results:
-                    reply_text = non_emoji_results[0]
+
+            reply_text = await self._resolve_group_reply_text(
+                response=response,
+                tool_results=tool_results,
+                group_id=group_id,
+                activity_version=activity_version,
+                stale_reason=f"after {character_name} dispatched emoji followup",
+                system_prompt=system_prompt,
+                context=context,
+                user_message=trigger_hint,
+                character_name=character_name,
+            )
             
             if reply_text:
                 await session.add(ChatMessage(
