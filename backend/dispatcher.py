@@ -339,8 +339,8 @@ class Dispatcher:
             logger.debug(f"Failed to resolve mentions for dispatcher: {e}")
             return message.raw_message
 
-    def _explicit_mention_target(self, messages: list[BufferedMessage]) -> Optional[str]:
-        """Return the latest explicitly mentioned character, if any.
+    def _explicit_mention_targets(self, messages: list[BufferedMessage]) -> list[str]:
+        """Return all explicitly mentioned characters found in buffered messages.
 
         OneBot at segments carry the QQ id and are more reliable than raw text,
         so they are checked before fallback textual @ matching.
@@ -353,14 +353,20 @@ class Dispatcher:
             bot_qq_map = {}
 
         qq_name_map = self._get_qq_name_map()
-        for msg in reversed(messages):
+        seen = set()
+        targets = []
+
+        def add_target(char_name: Optional[str]):
+            if char_name and char_name in self._available_characters and char_name not in seen:
+                seen.add(char_name)
+                targets.append(char_name)
+
+        for msg in messages:
             for seg in msg.message_segments:
                 if seg.get("type") != "at":
                     continue
                 qq = str(seg.get("data", {}).get("qq", ""))
-                char_name = bot_qq_map.get(qq)
-                if char_name in self._available_characters:
-                    return char_name
+                add_target(bot_qq_map.get(qq))
 
             raw_message = msg.raw_message or ""
             for char_name in self._available_characters:
@@ -371,9 +377,15 @@ class Dispatcher:
                 aliases.update(qq for qq, mapped in bot_qq_map.items() if mapped == char_name)
                 for alias in aliases:
                     if alias and re.search(f"@{re.escape(alias)}(?=[：:，,。.！!？? \\t\\n]|$)", raw_message):
-                        return char_name
+                        add_target(char_name)
+                        break
 
-        return None
+        return targets
+
+    def _explicit_mention_target(self, messages: list[BufferedMessage]) -> Optional[str]:
+        """Return the latest explicitly mentioned character, if any."""
+        targets = self._explicit_mention_targets(messages)
+        return targets[-1] if targets else None
     
     async def on_flush(self, group_id: str, messages: list[BufferedMessage]):
         """消息缓冲区 flush 回调"""
@@ -463,13 +475,21 @@ class Dispatcher:
             
             group_id = messages[-1].group_id if messages else ""
             decision = self._parse_tool_call(response.tool_calls[0])
-            mention_target = self._explicit_mention_target(messages)
-            if mention_target:
+            mention_targets = self._explicit_mention_targets(messages)
+            if len(mention_targets) == 1:
                 decision = DispatcherDecision(
                     action="reply",
-                    character=mention_target,
+                    character=mention_targets[0],
                     strategy=decision.strategy,
-                    reason=f"明确@了{mention_target}",
+                    reason=f"明确@了{mention_targets[0]}",
+                    chat_state="active",
+                )
+            elif len(mention_targets) > 1:
+                decision = DispatcherDecision(
+                    action="chain",
+                    characters=mention_targets,
+                    strategy=decision.strategy,
+                    reason=f"缓冲区内明确@了多个角色: {'、'.join(mention_targets)}",
                     chat_state="active",
                 )
             decision = self._apply_mechanical_constraints(decision, group_id)
@@ -742,7 +762,17 @@ class Dispatcher:
         
         # 先将消息记录到 session
         await orchestrator.handle_buffered_messages(group_id, messages)
-        
+
+        mention_targets = self._explicit_mention_targets(messages)
+        if mention_targets:
+            for char_name in mention_targets[:3]:
+                await orchestrator.execute_reply(
+                    group_id=group_id,
+                    character_name=char_name,
+                    trigger_message=messages[-1],
+                )
+            return
+
         last_msg = messages[-1]
         
         # 检查是否有 @角色名 或关键词

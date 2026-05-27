@@ -221,8 +221,60 @@ def test_dispatcher_uses_at_segment_as_explicit_target():
             ],
         )
 
+        assert dispatcher._explicit_mention_targets([msg]) == ["市谷有咲"]
         assert dispatcher._explicit_mention_target([msg]) == "市谷有咲"
         assert dispatcher._resolve_message_mentions(msg) == "[对市谷有咲说] 来一下"
+    finally:
+        orchestrator._bot_qq_map = old_bot_qq_map
+
+
+def test_dispatcher_collects_all_explicit_targets_in_buffer_order():
+    from datetime import datetime
+    from backend.dispatcher import Dispatcher
+    from backend.message_buffer import BufferedMessage
+    from backend.orchestrator import orchestrator
+
+    old_bot_qq_map = orchestrator._bot_qq_map.copy()
+    try:
+        orchestrator._bot_qq_map = {
+            "111": "户山香澄",
+            "222": "市谷有咲",
+            "333": "花园多惠",
+        }
+        dispatcher = Dispatcher()
+        dispatcher.set_available_characters(["户山香澄", "市谷有咲", "花园多惠"])
+
+        msg1 = BufferedMessage(
+            port=8081,
+            data={},
+            timestamp=datetime.now(),
+            group_id="1107527508",
+            user_id="1183508397",
+            raw_message="@111 @222 都来一下",
+            sender_name="自然常数2.718",
+            message_segments=[
+                {"type": "at", "data": {"qq": "111"}},
+                {"type": "text", "data": {"text": " "}},
+                {"type": "at", "data": {"qq": "222"}},
+                {"type": "text", "data": {"text": " 都来一下"}},
+            ],
+        )
+        msg2 = BufferedMessage(
+            port=8081,
+            data={},
+            timestamp=datetime.now(),
+            group_id="1107527508",
+            user_id="1183508397",
+            raw_message="@333 你也来",
+            sender_name="自然常数2.718",
+            message_segments=[
+                {"type": "at", "data": {"qq": "333"}},
+                {"type": "text", "data": {"text": " 你也来"}},
+            ],
+        )
+
+        assert dispatcher._explicit_mention_targets([msg1, msg2]) == ["户山香澄", "市谷有咲", "花园多惠"]
+        assert dispatcher._explicit_mention_target([msg1, msg2]) == "花园多惠"
     finally:
         orchestrator._bot_qq_map = old_bot_qq_map
 
