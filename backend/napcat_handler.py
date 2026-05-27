@@ -2,7 +2,13 @@ import time
 from datetime import datetime
 from typing import Optional, Callable
 from backend.models import MessageEvent, ChatMessage
-from backend.utils import get_logger, parse_message_text, extract_image_urls, normalize_message_segments_for_dedup
+from backend.utils import (
+    get_logger,
+    parse_message_text,
+    extract_image_urls,
+    normalize_message_segments_for_dedup,
+    normalize_raw_message_for_dedup,
+)
 
 logger = get_logger("napcat_handler")
 
@@ -56,7 +62,7 @@ class NapCatMessageHandler:
             }
 
         message_segments = data.get("message", [])
-        message_text = parse_message_text(message_segments) if message_segments else raw_message
+        message_text = parse_message_text(message_segments) if message_segments else normalize_raw_message_for_dedup(raw_message)
         key = (
             data.get("message_type", ""),
             str(data.get("group_id", "")),

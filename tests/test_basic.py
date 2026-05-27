@@ -336,5 +336,80 @@ async def test_napcat_handler_deduplicates_same_sticker_with_different_urls():
     assert handled == [(8081, 201)]
 
 
+@pytest.mark.asyncio
+async def test_napcat_handler_deduplicates_raw_reply_at_with_different_reply_ids():
+    from backend.napcat_handler import NapCatMessageHandler
+
+    handled = []
+
+    async def on_group_message(port, data):
+        handled.append((port, data["message_id"]))
+
+    handler = NapCatMessageHandler()
+    handler.on_group_message = on_group_message
+
+    base_event = {
+        "post_type": "message",
+        "message_type": "group",
+        "group_id": 1107527508,
+        "user_id": 2708174131,
+        "time": 1780000000,
+        "sender": {"nickname": "Jjjjkooo"},
+    }
+
+    for port, message_id, reply_id in (
+        (8084, 301, 1236921153),
+        (8081, 302, 1871555620),
+        (8083, 303, 191742165),
+        (8082, 304, 870123998),
+    ):
+        event = {
+            **base_event,
+            "message_id": message_id,
+            "raw_message": f"[CQ:reply,id={reply_id}][CQ:at,qq=3677613276] 我错了",
+            "message": [],
+        }
+        await handler.handle_event(port, event)
+
+    assert handled == [(8084, 301)]
+
+
+@pytest.mark.asyncio
+async def test_napcat_handler_deduplicates_segment_reply_at_with_different_reply_ids():
+    from backend.napcat_handler import NapCatMessageHandler
+
+    handled = []
+
+    async def on_group_message(port, data):
+        handled.append((port, data["message_id"]))
+
+    handler = NapCatMessageHandler()
+    handler.on_group_message = on_group_message
+
+    base_event = {
+        "post_type": "message",
+        "message_type": "group",
+        "group_id": 1107527508,
+        "user_id": 2708174131,
+        "time": 1780000000,
+        "sender": {"nickname": "Jjjjkooo"},
+    }
+
+    for port, message_id, reply_id in ((8084, 401, 1), (8081, 402, 2), (8083, 403, 3)):
+        event = {
+            **base_event,
+            "message_id": message_id,
+            "raw_message": "",
+            "message": [
+                {"type": "reply", "data": {"id": str(reply_id)}},
+                {"type": "at", "data": {"qq": "3677613276"}},
+                {"type": "text", "data": {"text": " 我错了"}},
+            ],
+        }
+        await handler.handle_event(port, event)
+
+    assert handled == [(8084, 401)]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

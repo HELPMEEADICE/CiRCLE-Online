@@ -16,6 +16,8 @@ _VOLATILE_MEDIA_KEYS = {
     "base64",
 }
 
+_CQ_CODE_RE = re.compile(r"\[CQ:([^,\]]+)((?:,[^\]]*)?)\]")
+
 
 def _stable_media_value(value):
     if value is None:
@@ -29,6 +31,62 @@ def _stable_media_value(value):
                 return query[key][0]
     text = text.split("?", 1)[0]
     return text.rsplit("/", 1)[-1]
+
+
+def _parse_cq_params(params_text: str) -> dict[str, str]:
+    params = {}
+    for item in params_text.lstrip(",").split(","):
+        if not item or "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        params[key] = value
+    return params
+
+
+def normalize_raw_message_for_dedup(raw_message: str) -> str:
+    """Normalize raw CQ text for cross-port deduplication.
+
+    Reply CQ ids and media URLs can differ between NapCat endpoints for the same
+    logical group message. Keep stable target/media identity and user text only.
+    """
+    def replace(match):
+        cq_type = match.group(1)
+        params = _parse_cq_params(match.group(2))
+
+        if cq_type == "reply":
+            return "[CQ:reply]"
+        if cq_type == "at":
+            qq = params.get("qq", "")
+            return f"[CQ:at,qq={qq}]" if qq else "[CQ:at]"
+        if cq_type == "image":
+            identity = []
+            for key in ("file_unique", "file_id", "md5", "sha", "file", "summary", "sub_type"):
+                value = params.get(key)
+                if value:
+                    identity.append(f"{key}={_stable_media_value(value)}")
+            if not identity:
+                identity = [
+                    f"{key}={_stable_media_value(value)}"
+                    for key, value in sorted(params.items())
+                    if key not in _VOLATILE_MEDIA_KEYS and value
+                ]
+            return f"[CQ:image,{','.join(identity)}]" if identity else "[CQ:image]"
+        if cq_type in {"face", "mface"}:
+            identity = []
+            for key in ("id", "raw_id", "emoji_id", "key", "summary", "name", "text"):
+                value = params.get(key)
+                if value:
+                    identity.append(f"{key}={_stable_media_value(value)}")
+            return f"[CQ:{cq_type},{','.join(identity)}]" if identity else f"[CQ:{cq_type}]"
+
+        stable_params = [
+            f"{key}={_stable_media_value(value)}"
+            for key, value in sorted(params.items())
+            if key not in _VOLATILE_MEDIA_KEYS and value
+        ]
+        return f"[CQ:{cq_type},{','.join(stable_params)}]" if stable_params else f"[CQ:{cq_type}]"
+
+    return _CQ_CODE_RE.sub(replace, raw_message or "")
 
 
 def setup_logging(level: str = "INFO", log_file: str = ""):
@@ -123,6 +181,8 @@ def normalize_message_segments_for_dedup(message_segments: list[dict]) -> tuple:
                 if value:
                     identity.append((key, _stable_media_value(value)))
             normalized.append((seg_type, tuple(identity)))
+        elif seg_type == "reply":
+            normalized.append((seg_type, ()))
         else:
             normalized.append((seg_type, tuple(sorted((str(k), str(v)) for k, v in data.items()))))
 
