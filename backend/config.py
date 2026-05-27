@@ -72,6 +72,7 @@ class BufferConfig(BaseSettings):
 class DispatcherConfig(BaseSettings):
     """分配器配置"""
     enabled: bool = True
+    supreme_power: bool = False
     fallback_to_simple: bool = True
     fallback_reply_probability: float = 0.3
     assistant_max_tokens: int = 1024
@@ -170,7 +171,7 @@ def save_port_assignments(assignments: dict[int, dict]):
 
 
 def _toml_multiline_string(value: str) -> str:
-    escaped = value.replace("\\", "\\\\").replace('"""', '\\"""')
+    escaped = value.replace("\\", "\\\\").replace("\r", "\\r").replace('"""', '\\"""')
     return f'"""{escaped}"""'
 
 
@@ -231,6 +232,7 @@ def save_config(app_config: AppConfig):
 
     lines.append("[orchestrator.dispatcher]")
     lines.append(f"enabled = {'true' if app_config.orchestrator.dispatcher.enabled else 'false'}")
+    lines.append(f"supreme_power = {'true' if app_config.orchestrator.dispatcher.supreme_power else 'false'}")
     lines.append(f"fallback_to_simple = {'true' if app_config.orchestrator.dispatcher.fallback_to_simple else 'false'}")
     lines.append(f"fallback_reply_probability = {app_config.orchestrator.dispatcher.fallback_reply_probability}")
     lines.append(f"assistant_max_tokens = {app_config.orchestrator.dispatcher.assistant_max_tokens}")

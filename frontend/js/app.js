@@ -517,9 +517,11 @@ class CircleOnlineApp {
 
     async saveDispatcherConfig() {
         const dispatcherEnabled = document.getElementById('cfg-dispatcher_enabled')?.checked;
+        const supremePower = document.getElementById('cfg-dispatcher_supreme_power')?.checked;
         const customPrompt = this.getField('cfg-dispatcher_prompt');
         const payload = {
             enabled: dispatcherEnabled,
+            supreme_power: supremePower,
             dispatcher_preset: this._selectedDispatcherPreset,
             dispatcher_prompt: customPrompt || '',
         };
@@ -550,6 +552,8 @@ class CircleOnlineApp {
             this.setField('cfg-dispatcher_prompt', data.dispatcher_prompt);
             const dispatcherEnabled = document.getElementById('cfg-dispatcher_enabled');
             if (dispatcherEnabled) dispatcherEnabled.checked = data.enabled;
+            const supremePower = document.getElementById('cfg-dispatcher_supreme_power');
+            if (supremePower) supremePower.checked = data.supreme_power;
         } catch (error) {
             if (error.message !== 'Unauthorized') {
                 console.error('Load dispatcher config error:', error);

@@ -171,6 +171,27 @@ def test_dispatcher_mechanical_constraints_filter_chain_characters():
         config.orchestrator.auto_dialogue.chain_length = old_chain_length
 
 
+def test_dispatcher_supreme_power_ignores_chain_cap():
+    from backend.config import config
+    from backend.dispatcher import Dispatcher, DispatcherDecision
+
+    old_supreme_power = config.orchestrator.dispatcher.supreme_power
+    config.orchestrator.dispatcher.supreme_power = True
+    try:
+        dispatcher = Dispatcher()
+        dispatcher.set_available_characters(["户山香澄", "花园多惠", "市谷有咲", "山吹沙绫"])
+
+        decision = dispatcher._apply_mechanical_constraints(DispatcherDecision(
+            action="chain",
+            characters=["户山香澄", "不存在", "花园多惠", "市谷有咲", "山吹沙绫"],
+        ))
+
+        assert decision.action == "chain"
+        assert decision.characters == ["户山香澄", "花园多惠", "市谷有咲", "山吹沙绫"]
+    finally:
+        config.orchestrator.dispatcher.supreme_power = old_supreme_power
+
+
 def test_dispatcher_uses_at_segment_as_explicit_target():
     from datetime import datetime
     from backend.dispatcher import Dispatcher

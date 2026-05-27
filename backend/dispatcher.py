@@ -64,6 +64,7 @@ _DISPATCHER_PROMPT_TEMPLATE = """你是一个群聊调度器，只负责决定�
 - 被@或角色名被明确提及时，优先 schedule_reply 给对应角色
 - 多个角色都非常适合参与时才 schedule_chain
 - 如果机械参数显示 cooldown_blocked 或 remaining_chain_slots 为 0，优先 skip_response
+- 当 supreme_power_enabled=true 时，调度器拥有至高权限：可以无视 terminated、cooldown_blocked、remaining_chain_slots 等机械限制，必要时强行继续对话。
 - 如果只是不确定，选择 skip_response
 
 ## 决策规则
@@ -391,7 +392,7 @@ class Dispatcher:
                 chat_state = self._chat_states.get(group_id, "active")
                 
                 # 如果已终止，检查是否需要重置
-                if chat_state == "terminated":
+                if chat_state == "terminated" and not config.orchestrator.dispatcher.supreme_power:
                     if self._should_reset_chat(messages):
                         self._chat_states[group_id] = "active"
                         chat_state = "active"
@@ -486,6 +487,7 @@ class Dispatcher:
         now = datetime.now()
         lines = [
             f"group_reply_probability={config.orchestrator.group_reply_probability}",
+            f"supreme_power_enabled={config.orchestrator.dispatcher.supreme_power}",
             f"fallback_reply_probability={get_preset_fallback_probability(config.orchestrator.dispatcher.dispatcher_preset)}",
             f"auto_dialogue_enabled={auto_cfg.enabled}",
             f"chain_length={auto_cfg.chain_length}",
@@ -551,6 +553,9 @@ class Dispatcher:
 
     def _apply_mechanical_constraints(self, decision: DispatcherDecision, group_id: str = "") -> DispatcherDecision:
         """用链长、冷却和可用角色做硬约束兜底。"""
+        if config.orchestrator.dispatcher.supreme_power:
+            return self._apply_supreme_constraints(decision)
+
         if decision.action == "reply":
             if not self._is_schedulable(decision.character, group_id):
                 return self._create_skip_decision(f"角色不可调度或处于冷却: {decision.character}")
@@ -568,6 +573,28 @@ class Dispatcher:
                 characters.append(char_name)
                 if len(characters) >= max_chain:
                     break
+            if not characters:
+                return self._create_skip_decision("链式调度无可用角色")
+            decision.characters = characters
+            return decision
+
+        return decision
+
+    def _apply_supreme_constraints(self, decision: DispatcherDecision) -> DispatcherDecision:
+        """Supreme mode only validates character existence, not timing or chain limits."""
+        if decision.action == "reply":
+            if not decision.character or decision.character not in self._available_characters:
+                return self._create_skip_decision(f"未知角色: {decision.character}")
+            return decision
+
+        if decision.action == "chain":
+            seen = set()
+            characters = []
+            for char_name in decision.characters:
+                if char_name in seen or char_name not in self._available_characters:
+                    continue
+                seen.add(char_name)
+                characters.append(char_name)
             if not characters:
                 return self._create_skip_decision("链式调度无可用角色")
             decision.characters = characters
@@ -688,9 +715,10 @@ class Dispatcher:
         
         elif decision.action == "chain":
             # 多角色依次回复
-            for i, char in enumerate(decision.characters[:3]):  # 最多3个角色
+            chain_characters = decision.characters if config.orchestrator.dispatcher.supreme_power else decision.characters[:3]
+            for i, char in enumerate(chain_characters):
                 # 检查对话状态是否已终止
-                if self._chat_states.get(group_id) == "terminated":
+                if self._chat_states.get(group_id) == "terminated" and not config.orchestrator.dispatcher.supreme_power:
                     logger.info(f"Chain interrupted: chat terminated for group {group_id}")
                     break
                 
@@ -702,7 +730,7 @@ class Dispatcher:
                 )
                 
                 # 角色间添加延迟
-                if i < len(decision.characters) - 1:
+                if i < len(chain_characters) - 1:
                     await asyncio.sleep(2)  # 2秒间隔
     
     async def _fallback_decision(self, group_id: str, messages: list[BufferedMessage]):

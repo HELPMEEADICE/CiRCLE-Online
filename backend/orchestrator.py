@@ -1123,12 +1123,13 @@ class Orchestrator:
 
         auto_config = config.orchestrator.auto_dialogue
 
-        if depth >= auto_config.chain_length:
+        max_depth = 50 if config.orchestrator.dispatcher.supreme_power else auto_config.chain_length
+        if depth >= max_depth:
             return
 
         now = datetime.now()
         last_reply_time = self._last_ai_reply_time[group_id][responding_character]
-        if (now - last_reply_time).total_seconds() * 1000 < auto_config.cooldown_ms:
+        if not config.orchestrator.dispatcher.supreme_power and (now - last_reply_time).total_seconds() * 1000 < auto_config.cooldown_ms:
             return
 
         self._last_ai_reply_time[group_id][responding_character] = now
@@ -1141,7 +1142,7 @@ class Orchestrator:
             if char_name == responding_character:
                 continue
 
-            if self._chain_counters[group_id][char_name] >= auto_config.chain_length:
+            if not config.orchestrator.dispatcher.supreme_power and self._chain_counters[group_id][char_name] >= auto_config.chain_length:
                 continue
 
             if random.random() > auto_config.trigger_probability:
@@ -1195,7 +1196,7 @@ class Orchestrator:
         auto_config = config.orchestrator.auto_dialogue
 
         last_init_time = self._last_initiation_time[group_id]
-        if (now - last_init_time).total_seconds() * 1000 < auto_config.initiation_interval_ms:
+        if not config.orchestrator.dispatcher.supreme_power and (now - last_init_time).total_seconds() * 1000 < auto_config.initiation_interval_ms:
             return False
 
         return random.random() < auto_config.initiation_probability

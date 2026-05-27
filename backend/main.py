@@ -383,6 +383,7 @@ async def get_config():
             },
             "dispatcher": {
                 "enabled": cfg.orchestrator.dispatcher.enabled,
+                "supreme_power": cfg.orchestrator.dispatcher.supreme_power,
                 "fallback_to_simple": cfg.orchestrator.dispatcher.fallback_to_simple,
                 "fallback_reply_probability": cfg.orchestrator.dispatcher.fallback_reply_probability,
                 "assistant_max_tokens": cfg.orchestrator.dispatcher.assistant_max_tokens,
@@ -664,6 +665,7 @@ async def update_chat_config(update: ChatConfigUpdate):
 class DispatcherConfigUpdate(BaseModel):
     """分配器配置更新"""
     enabled: bool = None
+    supreme_power: bool = None
     fallback_to_simple: bool = None
     fallback_reply_probability: float = None
     assistant_max_tokens: int = None
@@ -679,6 +681,7 @@ async def get_dispatcher_config():
     from backend.dispatcher import DISPATCHER_PRESETS
     return {
         "enabled": cfg.orchestrator.dispatcher.enabled,
+        "supreme_power": cfg.orchestrator.dispatcher.supreme_power,
         "fallback_to_simple": cfg.orchestrator.dispatcher.fallback_to_simple,
         "fallback_reply_probability": cfg.orchestrator.dispatcher.fallback_reply_probability,
         "assistant_max_tokens": cfg.orchestrator.dispatcher.assistant_max_tokens,
@@ -699,6 +702,8 @@ async def update_dispatcher_config(update: DispatcherConfigUpdate):
 
     if update.enabled is not None:
         current.orchestrator.dispatcher.enabled = update.enabled
+    if update.supreme_power is not None:
+        current.orchestrator.dispatcher.supreme_power = update.supreme_power
     if update.fallback_to_simple is not None:
         current.orchestrator.dispatcher.fallback_to_simple = update.fallback_to_simple
     if update.fallback_reply_probability is not None:
