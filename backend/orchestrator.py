@@ -681,7 +681,7 @@ class Orchestrator:
             context=context,
             user_message=raw_message,
             character_name=character_name,
-            tools=_BAN_TOOL + _EMOJI_TOOL + _ANALYZE_IMAGE_TOOL,
+            tools=_ANALYZE_IMAGE_TOOL,
         )
 
         if response:
