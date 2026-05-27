@@ -1,9 +1,8 @@
-import json
 import time
 from datetime import datetime
 from typing import Optional, Callable
 from backend.models import MessageEvent, ChatMessage
-from backend.utils import get_logger, parse_message_text, extract_image_urls
+from backend.utils import get_logger, parse_message_text, extract_image_urls, normalize_message_segments_for_dedup
 
 logger = get_logger("napcat_handler")
 
@@ -56,13 +55,15 @@ class NapCatMessageHandler:
                 k: v for k, v in self._seen_message_keys.items() if v > cutoff
             }
 
+        message_segments = data.get("message", [])
+        message_text = parse_message_text(message_segments) if message_segments else raw_message
         key = (
             data.get("message_type", ""),
             str(data.get("group_id", "")),
             str(data.get("user_id", "")),
             data.get("time", ""),
-            raw_message,
-            json.dumps(data.get("message", []), ensure_ascii=False, sort_keys=True, default=str),
+            message_text,
+            normalize_message_segments_for_dedup(message_segments),
         )
         first_seen = self._seen_message_keys.get(key)
         if first_seen is not None and now - first_seen < self._CONTENT_DEDUP_TTL:

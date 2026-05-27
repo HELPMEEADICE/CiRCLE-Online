@@ -9,7 +9,14 @@ from backend.llm_client import RoleplayResponse
 from backend.models import ChatMessage, CharacterAssignment
 from backend.config import config, load_port_assignments, save_port_assignments
 from backend.token_counter import count_message_tokens, count_single_message_tokens, truncate_messages_to_token_budget
-from backend.utils import get_logger, parse_message_text, build_text_message, extract_image_urls, resolve_at_mentions
+from backend.utils import (
+    get_logger,
+    parse_message_text,
+    build_text_message,
+    extract_image_urls,
+    resolve_at_mentions,
+    normalize_media_identity_values,
+)
 from backend.database import db
 
 logger = get_logger("orchestrator")
@@ -305,7 +312,7 @@ class SessionMemory:
             and left.is_bot == right.is_bot
             and (left.raw_content if left.raw_content is not None else MESSAGE_ID_SUFFIX_RE.sub("", left.content))
             == (right.raw_content if right.raw_content is not None else MESSAGE_ID_SUFFIX_RE.sub("", right.content))
-            and (left.image_urls or []) == (right.image_urls or [])
+            and normalize_media_identity_values(left.image_urls) == normalize_media_identity_values(right.image_urls)
         )
 
     def get_token_count(self) -> int:
@@ -612,6 +619,7 @@ class Orchestrator:
             is_bot=is_bot,
             sender_name=sender_name,
             image_urls=image_urls if image_urls else None,
+            message_id=message_id,
         ))
 
         if not should_reply:
@@ -640,7 +648,7 @@ class Orchestrator:
         if response:
             tool_results = []
             if response.tool_calls:
-                tool_results = await self._execute_tool_calls(response.tool_calls, group_id, port, is_private=False)
+                tool_results = await self._execute_tool_calls(response.tool_calls, group_id, port, is_private=False, context_message_id=message_id)
 
             reply_text = response.content
             if tool_results and not reply_text:
@@ -763,7 +771,7 @@ class Orchestrator:
 
         return random.random() < config.orchestrator.group_reply_probability
 
-    async def _execute_tool_calls(self, tool_calls, group_id: str, port: int, is_private: bool = False) -> list[str]:
+    async def _execute_tool_calls(self, tool_calls, group_id: str, port: int, is_private: bool = False, context_message_id: int = 0) -> list[str]:
         results = []
         for tc in tool_calls:
             if tc.function_name == "set_group_ban":
@@ -808,7 +816,7 @@ class Orchestrator:
                             results.append(f"[set_group_ban] 执行异常: {e}")
                             logger.error(f"[BAN ERROR] group={target_group} user={target_user} duration={duration} error={e}")
             elif tc.function_name == "set_msg_emoji_like":
-                msg_id = tc.arguments.get("message_id", 0)
+                msg_id = tc.arguments.get("message_id", 0) or context_message_id
                 emoji_id = tc.arguments.get("emoji_id", "")
                 if not msg_id or not emoji_id:
                     results.append(f"[set_msg_emoji_like] 缺少参数")

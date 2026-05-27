@@ -93,6 +93,40 @@ def test_group_context_collapses_duplicate_human_messages():
     ]
 
 
+def test_group_context_collapses_duplicate_images_with_different_urls():
+    from datetime import datetime
+    from backend.orchestrator import SessionMemory
+
+    session = SessionMemory("test_duplicate_image_context")
+    timestamp = datetime(2026, 5, 27, 20, 32, 5)
+    session.messages = [
+        ChatMessage(
+            role="user",
+            content="[自然常数2.718]: [图片] [图片:abc.image] [message_id=101]",
+            raw_content="[图片]",
+            qq_id="1183508397",
+            sender_name="自然常数2.718",
+            image_urls=["http://127.0.0.1:8081/get_image?file=abc.image&token=1"],
+            timestamp=timestamp,
+        ),
+        ChatMessage(
+            role="user",
+            content="[自然常数2.718]: [图片] [图片:abc.image] [message_id=102]",
+            raw_content="[图片]",
+            qq_id="1183508397",
+            sender_name="自然常数2.718",
+            image_urls=["http://127.0.0.1:8082/get_image?file=abc.image&token=2"],
+            timestamp=timestamp,
+        ),
+    ]
+
+    context = session.get_context_for_character("户山香澄", {})
+
+    assert [msg.content for msg in context] == [
+        "[自然常数2.718]: [图片] [图片:abc.image] [message_id=101]",
+    ]
+
+
 def test_dispatcher_parses_schedule_reply_tool_call():
     from backend.dispatcher import Dispatcher
     from backend.llm_client import ToolCall
@@ -222,6 +256,84 @@ async def test_napcat_handler_deduplicates_same_group_message_across_ports():
         await handler.handle_event(port, event)
 
     assert handled == [(8081, {**base_event, "message_id": 101})]
+
+
+@pytest.mark.asyncio
+async def test_napcat_handler_deduplicates_same_image_with_different_urls():
+    from backend.napcat_handler import NapCatMessageHandler
+
+    handled = []
+
+    async def on_group_message(port, data):
+        handled.append((port, data["message_id"]))
+
+    handler = NapCatMessageHandler()
+    handler.on_group_message = on_group_message
+
+    base_event = {
+        "post_type": "message",
+        "message_type": "group",
+        "group_id": 1107527508,
+        "user_id": 1183508397,
+        "time": 1780000000,
+        "sender": {"nickname": "自然常数2.718"},
+    }
+
+    for port, message_id in ((8081, 101), (8082, 102), (8083, 103), (8084, 104), (8085, 105)):
+        event = {
+            **base_event,
+            "message_id": message_id,
+            "raw_message": f"[CQ:image,file=abc.image,url=http://127.0.0.1:{port}/get_image?token={port}]",
+            "message": [{
+                "type": "image",
+                "data": {
+                    "file": "abc.image",
+                    "url": f"http://127.0.0.1:{port}/get_image?token={port}",
+                },
+            }],
+        }
+        await handler.handle_event(port, event)
+
+    assert handled == [(8081, 101)]
+
+
+@pytest.mark.asyncio
+async def test_napcat_handler_deduplicates_same_sticker_with_different_urls():
+    from backend.napcat_handler import NapCatMessageHandler
+
+    handled = []
+
+    async def on_group_message(port, data):
+        handled.append((port, data["message_id"]))
+
+    handler = NapCatMessageHandler()
+    handler.on_group_message = on_group_message
+
+    base_event = {
+        "post_type": "message",
+        "message_type": "group",
+        "group_id": 1107527508,
+        "user_id": 1183508397,
+        "time": 1780000000,
+        "sender": {"nickname": "自然常数2.718"},
+    }
+
+    for port, message_id in ((8081, 201), (8082, 202), (8083, 203), (8084, 204), (8085, 205)):
+        event = {
+            **base_event,
+            "message_id": message_id,
+            "raw_message": f"[CQ:mface,emoji_id=114514,url=http://127.0.0.1:{port}/mface?token={port}]",
+            "message": [{
+                "type": "mface",
+                "data": {
+                    "emoji_id": "114514",
+                    "url": f"http://127.0.0.1:{port}/mface?token={port}",
+                },
+            }],
+        }
+        await handler.handle_event(port, event)
+
+    assert handled == [(8081, 201)]
 
 
 if __name__ == "__main__":

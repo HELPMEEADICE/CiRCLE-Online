@@ -1,8 +1,34 @@
 import logging
 import re
 import sys
+from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 from datetime import datetime
+
+
+_VOLATILE_MEDIA_KEYS = {
+    "url",
+    "preview",
+    "preview_url",
+    "thumb",
+    "thumb_url",
+    "path",
+    "base64",
+}
+
+
+def _stable_media_value(value):
+    if value is None:
+        return ""
+    text = str(value).replace("\\", "/")
+    parsed = urlparse(text)
+    if parsed.query:
+        query = parse_qs(parsed.query)
+        for key in ("file", "file_id", "md5", "emoji_id"):
+            if query.get(key):
+                return query[key][0]
+    text = text.split("?", 1)[0]
+    return text.rsplit("/", 1)[-1]
 
 
 def setup_logging(level: str = "INFO", log_file: str = ""):
@@ -56,10 +82,55 @@ def parse_message_text(message_segments: list[dict]) -> str:
         elif seg_type == "reply":
             parts.append("[回复]")
         elif seg_type == "face":
-            parts.append("[表情]")
+            face_id = data.get("id", "") or data.get("raw_id", "")
+            parts.append(f"[表情:{face_id}]" if face_id else "[表情]")
+        elif seg_type == "mface":
+            emoji_id = data.get("emoji_id", "") or data.get("id", "") or data.get("key", "")
+            parts.append(f"[表情包:{emoji_id}]" if emoji_id else "[表情包]")
         else:
             parts.append(f"[{seg_type}]")
     return "".join(parts)
+
+
+def normalize_message_segments_for_dedup(message_segments: list[dict]) -> tuple:
+    """Build a stable message-segment identity for cross-port deduplication.
+
+    Media URLs and local temp paths can differ per NapCat endpoint, while file/id/md5
+    fields identify the same QQ image or sticker across endpoints.
+    """
+    normalized = []
+    for seg in message_segments:
+        seg_type = seg.get("type", "")
+        data = seg.get("data", {}) or {}
+
+        if seg_type == "image":
+            identity = []
+            for key in ("file_unique", "file_id", "md5", "sha", "file", "summary", "sub_type"):
+                value = data.get(key)
+                if value:
+                    identity.append((key, _stable_media_value(value)))
+            if not identity:
+                identity = [
+                    (key, _stable_media_value(value))
+                    for key, value in sorted(data.items())
+                    if key not in _VOLATILE_MEDIA_KEYS and value
+                ]
+            normalized.append((seg_type, tuple(identity)))
+        elif seg_type in {"face", "mface"}:
+            identity = []
+            for key in ("id", "raw_id", "emoji_id", "key", "summary", "name", "text"):
+                value = data.get(key)
+                if value:
+                    identity.append((key, _stable_media_value(value)))
+            normalized.append((seg_type, tuple(identity)))
+        else:
+            normalized.append((seg_type, tuple(sorted((str(k), str(v)) for k, v in data.items()))))
+
+    return tuple(normalized)
+
+
+def normalize_media_identity_values(values: list[str] | None) -> tuple[str, ...]:
+    return tuple(_stable_media_value(value) for value in (values or []) if value)
 
 
 def extract_image_urls(message_segments: list[dict]) -> list[str]:
@@ -67,8 +138,8 @@ def extract_image_urls(message_segments: list[dict]) -> list[str]:
     for seg in message_segments:
         seg_type = seg.get("type", "")
         data = seg.get("data", {})
-        if seg_type == "image":
-            url = data.get("url", "") or data.get("file", "")
+        if seg_type in {"image", "mface"}:
+            url = data.get("url", "") or data.get("preview", "") or data.get("file", "")
             if url:
                 urls.append(url)
     return urls
