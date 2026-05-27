@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 from backend.config import load_config
 from backend.models import ChatMessage, CharacterInfo
 from backend.character_manager import CharacterManager
@@ -455,6 +456,60 @@ async def test_execute_reply_generates_text_after_emoji_only_tool_call(monkeypat
     assert saved_messages == ["来了"]
     assert llm_calls[0] is not None
     assert llm_calls[1] is None
+
+
+@pytest.mark.asyncio
+async def test_generate_roleplay_response_inserts_tool_guidance_between_history_and_current_message():
+    from backend.llm_client import LLMClient
+
+    captured_messages = None
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            nonlocal captured_messages
+            captured_messages = kwargs["messages"]
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="收到", tool_calls=[])
+                    )
+                ]
+            )
+
+    llm = LLMClient()
+    llm._client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+
+    response = await llm.generate_roleplay_response(
+        character_prompt="你是户山香澄",
+        context=[ChatMessage(role="user", content="历史消息")],
+        user_message="当前消息",
+        character_name="户山香澄",
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "set_msg_emoji_like",
+                    "description": "给指定消息添加表情回应",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "message_id": {"type": "integer", "description": "目标消息ID"},
+                            "emoji_id": {"type": "string", "description": "表情ID"},
+                        },
+                        "required": ["message_id", "emoji_id"],
+                    },
+                },
+            }
+        ],
+    )
+
+    assert response.content == "收到"
+    assert captured_messages is not None
+    assert captured_messages[1] == {"role": "user", "content": "历史消息"}
+    assert captured_messages[2]["role"] == "system"
+    assert "set_msg_emoji_like" in captured_messages[2]["content"]
+    assert "给指定消息添加表情回应" in captured_messages[2]["content"]
+    assert captured_messages[3] == {"role": "user", "content": "当前消息"}
 
 
 @pytest.mark.asyncio

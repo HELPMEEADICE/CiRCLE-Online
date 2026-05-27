@@ -91,6 +91,40 @@ class LLMClient:
             return {"thinking": {"type": "disabled"}}
         return None
 
+    def _build_tool_guidance_message(self, tools: list[dict] | None) -> Optional[ChatMessage]:
+        if not tools:
+            return None
+
+        lines = [
+            "你现在可以调用工具。先结合上面的历史消息判断，再决定是否需要在处理下一条当前消息时调用工具。",
+            "可用工具如下：",
+        ]
+
+        for tool in tools:
+            function = tool.get("function", {})
+            name = function.get("name", "unknown_tool")
+            description = function.get("description", "")
+            parameters = function.get("parameters", {})
+            properties = parameters.get("properties", {})
+            required = set(parameters.get("required", []))
+
+            param_parts = []
+            for param_name, meta in properties.items():
+                param_desc = meta.get("description", "")
+                required_mark = "必填" if param_name in required else "可选"
+                if param_desc:
+                    param_parts.append(f"{param_name}({required_mark}): {param_desc}")
+                else:
+                    param_parts.append(f"{param_name}({required_mark})")
+
+            tool_line = f"- {name}: {description}" if description else f"- {name}"
+            if param_parts:
+                tool_line = f"{tool_line}；参数：" + "；".join(param_parts)
+            lines.append(tool_line)
+
+        lines.append("如果工具能更准确地完成任务，就直接调用；不要因为上下文很长而忽略工具。")
+        return ChatMessage(role="system", content="\n".join(lines))
+
     async def analyze_image(self, image_url: str, prompt: str = "请详细描述这张图片的内容，包括表情包的文字、人物表情、动作等信息。") -> Optional[str]:
         if not self._vision_client:
             return None
@@ -173,6 +207,9 @@ class LLMClient:
         tools: list[dict] = None,
     ) -> RoleplayResponse | None:
         messages = context.copy()
+        tool_guidance_message = self._build_tool_guidance_message(tools)
+        if tool_guidance_message:
+            messages.append(tool_guidance_message)
         messages.append(ChatMessage(role="user", content=user_message))
 
         prefix = config.orchestrator.prompt_prefix
