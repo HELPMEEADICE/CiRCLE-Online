@@ -52,6 +52,47 @@ def test_group_context_keeps_only_own_replies_as_assistant():
     assert "[Poppin'Party成员] 市谷有咲" in context[1].content
 
 
+def test_group_context_collapses_duplicate_human_messages():
+    from datetime import datetime
+    from backend.orchestrator import SessionMemory
+
+    session = SessionMemory("test_duplicate_context")
+    timestamp = datetime(2026, 5, 27, 20, 32, 5)
+    session.messages = [
+        ChatMessage(
+            role="user",
+            content="[自然常数2.718]: 谁来了 [message_id=101]",
+            raw_content="谁来了",
+            qq_id="1183508397",
+            sender_name="自然常数2.718",
+            timestamp=timestamp,
+        ),
+        ChatMessage(
+            role="user",
+            content="[自然常数2.718]: 谁来了 [message_id=102]",
+            raw_content="谁来了",
+            qq_id="1183508397",
+            sender_name="自然常数2.718",
+            timestamp=timestamp,
+        ),
+        ChatMessage(
+            role="user",
+            content="[Jjjjkooo]: 🐵 [message_id=201]",
+            raw_content="🐵",
+            qq_id="2708174131",
+            sender_name="Jjjjkooo",
+            timestamp=timestamp,
+        ),
+    ]
+
+    context = session.get_context_for_character("户山香澄", {})
+
+    assert [msg.content for msg in context] == [
+        "[自然常数2.718]: 谁来了 [message_id=101]",
+        "[Jjjjkooo]: 🐵 [message_id=201]",
+    ]
+
+
 def test_dispatcher_parses_schedule_reply_tool_call():
     from backend.dispatcher import Dispatcher
     from backend.llm_client import ToolCall
@@ -94,6 +135,41 @@ def test_dispatcher_mechanical_constraints_filter_chain_characters():
     finally:
         config.orchestrator.auto_dialogue.enabled = old_enabled
         config.orchestrator.auto_dialogue.chain_length = old_chain_length
+
+
+def test_dispatcher_uses_at_segment_as_explicit_target():
+    from datetime import datetime
+    from backend.dispatcher import Dispatcher
+    from backend.message_buffer import BufferedMessage
+    from backend.orchestrator import orchestrator
+
+    old_bot_qq_map = orchestrator._bot_qq_map.copy()
+    try:
+        orchestrator._bot_qq_map = {
+            "111": "户山香澄",
+            "222": "市谷有咲",
+        }
+        dispatcher = Dispatcher()
+        dispatcher.set_available_characters(["户山香澄", "市谷有咲"])
+
+        msg = BufferedMessage(
+            port=8081,
+            data={},
+            timestamp=datetime.now(),
+            group_id="1107527508",
+            user_id="1183508397",
+            raw_message="@222 来一下",
+            sender_name="自然常数2.718",
+            message_segments=[
+                {"type": "at", "data": {"qq": "222"}},
+                {"type": "text", "data": {"text": " 来一下"}},
+            ],
+        )
+
+        assert dispatcher._explicit_mention_target([msg]) == "市谷有咲"
+        assert dispatcher._resolve_message_mentions(msg) == "[对市谷有咲说] 来一下"
+    finally:
+        orchestrator._bot_qq_map = old_bot_qq_map
 
 
 @pytest.mark.asyncio

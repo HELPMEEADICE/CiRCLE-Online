@@ -3,12 +3,13 @@
 import asyncio
 import json
 import random
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 from backend.message_buffer import BufferedMessage
 from backend.config import config
-from backend.utils import get_logger
+from backend.utils import get_logger, resolve_at_mentions
 
 logger = get_logger("dispatcher")
 
@@ -307,6 +308,71 @@ class Dispatcher:
     def set_available_characters(self, characters: list[str]):
         """设置可用角色列表"""
         self._available_characters = characters
+
+    def _get_qq_name_map(self) -> dict[str, str]:
+        try:
+            from backend.orchestrator import orchestrator
+            if not orchestrator._ws_server:
+                return {}
+            qq_name_map = {}
+            for port, conn in orchestrator._ws_server.connections.items():
+                if conn and conn.qq_name:
+                    char = orchestrator._assignments.get(port)
+                    if char:
+                        qq_name_map[conn.qq_name] = char
+            return qq_name_map
+        except Exception as e:
+            logger.debug(f"Failed to build QQ name map for dispatcher: {e}")
+            return {}
+
+    def _resolve_message_mentions(self, message: BufferedMessage) -> str:
+        try:
+            from backend.orchestrator import orchestrator
+            return resolve_at_mentions(
+                message.raw_message,
+                self._available_characters,
+                orchestrator._bot_qq_map,
+                self._get_qq_name_map(),
+            )
+        except Exception as e:
+            logger.debug(f"Failed to resolve mentions for dispatcher: {e}")
+            return message.raw_message
+
+    def _explicit_mention_target(self, messages: list[BufferedMessage]) -> Optional[str]:
+        """Return the latest explicitly mentioned character, if any.
+
+        OneBot at segments carry the QQ id and are more reliable than raw text,
+        so they are checked before fallback textual @ matching.
+        """
+        try:
+            from backend.orchestrator import orchestrator
+            bot_qq_map = orchestrator._bot_qq_map
+        except Exception as e:
+            logger.debug(f"Failed to read bot QQ map for dispatcher: {e}")
+            bot_qq_map = {}
+
+        qq_name_map = self._get_qq_name_map()
+        for msg in reversed(messages):
+            for seg in msg.message_segments:
+                if seg.get("type") != "at":
+                    continue
+                qq = str(seg.get("data", {}).get("qq", ""))
+                char_name = bot_qq_map.get(qq)
+                if char_name in self._available_characters:
+                    return char_name
+
+            raw_message = msg.raw_message or ""
+            for char_name in self._available_characters:
+                aliases = {char_name}
+                if len(char_name) > 2:
+                    aliases.add(char_name[-2:])
+                aliases.update(name for name, mapped in qq_name_map.items() if mapped == char_name)
+                aliases.update(qq for qq, mapped in bot_qq_map.items() if mapped == char_name)
+                for alias in aliases:
+                    if alias and re.search(f"@{re.escape(alias)}(?=[：:，,。.！!？? \\t\\n]|$)", raw_message):
+                        return char_name
+
+        return None
     
     async def on_flush(self, group_id: str, messages: list[BufferedMessage]):
         """消息缓冲区 flush 回调"""
@@ -366,7 +432,7 @@ class Dispatcher:
         # 构建消息上下文
         recent_messages = []
         for msg in messages[-20:]:  # 最多取20条
-            recent_messages.append(f"[{msg.sender_name}]: {msg.raw_message}")
+            recent_messages.append(f"[{msg.sender_name}]: {self._resolve_message_mentions(msg)}")
         messages_text = "\n".join(recent_messages)
         scheduler_state = self._build_scheduler_state(messages)
         
@@ -396,6 +462,15 @@ class Dispatcher:
             
             group_id = messages[-1].group_id if messages else ""
             decision = self._parse_tool_call(response.tool_calls[0])
+            mention_target = self._explicit_mention_target(messages)
+            if mention_target:
+                decision = DispatcherDecision(
+                    action="reply",
+                    character=mention_target,
+                    strategy=decision.strategy,
+                    reason=f"明确@了{mention_target}",
+                    chat_state="active",
+                )
             decision = self._apply_mechanical_constraints(decision, group_id)
             logger.info(f"Dispatcher decision: action={decision.action}, "
                        f"character={decision.character}, reason={decision.reason}")

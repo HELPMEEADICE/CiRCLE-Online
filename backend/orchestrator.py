@@ -1,5 +1,6 @@
 import asyncio
 import random
+import re
 from typing import Optional
 from collections import defaultdict
 from datetime import datetime
@@ -14,6 +15,7 @@ from backend.database import db
 logger = get_logger("orchestrator")
 
 CONTEXT_COMPRESSION_PATH = Path(__file__).parent.parent / "data" / "Context_Compression.md"
+MESSAGE_ID_SUFFIX_RE = re.compile(r"\s*\[message_id=\d+\]$")
 
 
 def load_context_compression(session_key: str) -> str:
@@ -38,6 +40,8 @@ def load_context_compression(session_key: str) -> str:
 
 class SessionMemory:
     """Persistent token-aware session memory backed by SQLite."""
+
+    _DUPLICATE_WINDOW_SECONDS = 5.0
 
     def __init__(self, session_key: str, max_messages: int = 20, max_tokens: int = 4096):
         self.session_key = session_key
@@ -68,6 +72,10 @@ class SessionMemory:
         logger.info(f"Loaded {len(self.messages)} msgs for session '{self.session_key}'")
 
     async def add(self, message: ChatMessage):
+        if self._is_recent_duplicate(message):
+            logger.debug(f"Skipped duplicate session message for '{self.session_key}': {message.content[:50]}")
+            return
+
         msg_tokens = count_single_message_tokens(message)
         self.messages.append(message)
         self._total_tokens += msg_tokens
@@ -209,7 +217,7 @@ class SessionMemory:
                 break
 
         result = []
-        for msg in self.messages:
+        for msg in self._deduplicated_messages():
             if msg.role == "system":
                 result.append(msg)
                 continue
@@ -264,6 +272,41 @@ class SessionMemory:
             result.append(transformed)
 
         return result
+
+    def _is_recent_duplicate(self, message: ChatMessage) -> bool:
+        if not self.messages or message.role != "user":
+            return False
+
+        previous = self.messages[-1]
+        if not self._same_logical_message(previous, message):
+            return False
+
+        return abs((message.timestamp - previous.timestamp).total_seconds()) <= self._DUPLICATE_WINDOW_SECONDS
+
+    def _deduplicated_messages(self) -> list[ChatMessage]:
+        deduplicated = []
+        for msg in self.messages:
+            if (
+                deduplicated
+                and msg.role == "user"
+                and self._same_logical_message(deduplicated[-1], msg)
+                and abs((msg.timestamp - deduplicated[-1].timestamp).total_seconds()) <= self._DUPLICATE_WINDOW_SECONDS
+            ):
+                continue
+            deduplicated.append(msg)
+        return deduplicated
+
+    @staticmethod
+    def _same_logical_message(left: ChatMessage, right: ChatMessage) -> bool:
+        return (
+            left.role == right.role == "user"
+            and left.qq_id == right.qq_id
+            and left.sender_name == right.sender_name
+            and left.is_bot == right.is_bot
+            and (left.raw_content if left.raw_content is not None else MESSAGE_ID_SUFFIX_RE.sub("", left.content))
+            == (right.raw_content if right.raw_content is not None else MESSAGE_ID_SUFFIX_RE.sub("", right.content))
+            and (left.image_urls or []) == (right.image_urls or [])
+        )
 
     def get_token_count(self) -> int:
         return self._total_tokens
