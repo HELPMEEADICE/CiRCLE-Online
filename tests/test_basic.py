@@ -52,6 +52,50 @@ def test_group_context_keeps_only_own_replies_as_assistant():
     assert "[Poppin'Party成员] 市谷有咲" in context[1].content
 
 
+def test_dispatcher_parses_schedule_reply_tool_call():
+    from backend.dispatcher import Dispatcher
+    from backend.llm_client import ToolCall
+
+    dispatcher = Dispatcher()
+    decision = dispatcher._parse_tool_call(ToolCall(
+        id="call_1",
+        function_name="schedule_reply",
+        arguments={
+            "character": "户山香澄",
+            "strategy": "接住话题",
+            "reason": "被直接提到",
+        },
+    ))
+
+    assert decision.action == "reply"
+    assert decision.character == "户山香澄"
+    assert decision.strategy == "接住话题"
+
+
+def test_dispatcher_mechanical_constraints_filter_chain_characters():
+    from backend.config import config
+    from backend.dispatcher import Dispatcher, DispatcherDecision
+
+    old_enabled = config.orchestrator.auto_dialogue.enabled
+    old_chain_length = config.orchestrator.auto_dialogue.chain_length
+    config.orchestrator.auto_dialogue.enabled = False
+    config.orchestrator.auto_dialogue.chain_length = 2
+    try:
+        dispatcher = Dispatcher()
+        dispatcher.set_available_characters(["户山香澄", "花园多惠"])
+
+        decision = dispatcher._apply_mechanical_constraints(DispatcherDecision(
+            action="chain",
+            characters=["户山香澄", "不存在", "花园多惠", "户山香澄"],
+        ))
+
+        assert decision.action == "chain"
+        assert decision.characters == ["户山香澄", "花园多惠"]
+    finally:
+        config.orchestrator.auto_dialogue.enabled = old_enabled
+        config.orchestrator.auto_dialogue.chain_length = old_chain_length
+
+
 @pytest.mark.asyncio
 async def test_send_action_registers_echo_before_send():
     from backend.websocket_server import NapCatConnection

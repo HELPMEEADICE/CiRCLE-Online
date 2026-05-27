@@ -34,7 +34,7 @@ class DispatcherDecision:
 
 
 # ── 调度器提示词模板 ──
-_DISPATCHER_PROMPT_TEMPLATE = """你是一个群聊消息分析助手，负责决定如何响应群聊消息。
+_DISPATCHER_PROMPT_TEMPLATE = """你是一个群聊调度器，只负责决定是否、由谁、按什么策略发言。
 
 ## 可用角色及其人设摘要
 {characters_info}
@@ -45,44 +45,31 @@ _DISPATCHER_PROMPT_TEMPLATE = """你是一个群聊消息分析助手，负责�
 ## 当前对话状态
 {chat_state}
 
+## 机械调度参数（必须作为硬约束参考）
+{scheduler_state}
+
 ## 分析任务
 
-请分析最近的群聊消息，决定最佳响应方式。考虑：
+请分析最近的群聊消息，然后必须通过一次 Function Calling 表达调度结果。考虑：
 1. 是否有人直接@某个角色或提到角色名
 2. 话题是否与某个角色的人设/兴趣相关
 3. 对话的氛围和情感
-4. 是否有需要管理的违规行为
+4. 近期是否已经太吵、同一角色是否刚说过话、链式对话是否已接近上限
 5. 沉默是否比发言更好
 
-## 输出格式（JSON）
-
-```json
-{{
-  "action": "reply|tool_only|skip|chain|terminate",
-  "character": "角色名（reply/tool_only时必填）",
-  "characters": ["角色名1", "角色名2"]（chain时必填）,
-  "tool_calls": [
-    {{
-      "function": "set_group_ban|set_msg_emoji_like",
-      "arguments": {{}}
-    }}
-  ],
-  "strategy": "回复策略描述（如：轻松调侃、严肃警告、关心询问等）",
-  "reason": "决策理由",
-  "chat_state": "active|winding_down|terminated"
-}}
-```
+## Function Calling 规则
+- 必须调用且只调用一个调度函数：schedule_reply、schedule_chain、skip_response、terminate_dialogue
+- 不要直接输出 JSON 或自然语言决策
+- 被@或角色名被明确提及时，优先 schedule_reply 给对应角色
+- 多个角色都非常适合参与时才 schedule_chain
+- 如果机械参数显示 cooldown_blocked 或 remaining_chain_slots 为 0，优先 skip_response
+- 如果只是不确定，选择 skip_response
 
 ## 决策规则
 
 ### reply - 角色适合回复时
 - 必须选择一个最合适的角色
-- 可附带 tool_calls（如回复的同时发表情）
 - strategy 描述回复的情感/风格
-
-### tool_only - 只需执行操作不需要回复时
-- 如：对某条消息发表情回应、对违规用户禁言
-- 必须在 tool_calls 中指定具体操作
 
 ### skip - 不需要任何响应时
 - 如：普通闲聊、话题与角色无关、已有其他角色回复
@@ -111,14 +98,89 @@ terminate 时：
 {enthusiasm_instruction}
 
 ## 可用工具说明
-1. set_group_ban - 禁言用户
-   - 参数：group_id(群号), user_id(QQ号), duration(秒数，默认600)
-   - 只有在用户持续恶意骚扰、发送违规内容时才可使用
-
-2. set_msg_emoji_like - 给消息添加表情回应
-   - 参数：message_id(消息ID), emoji_id(表情ID)
-   - 可用表情：128027(🐛下头)、128053(🐵无语)、128051(🐳喜欢)
+使用 Function Calling，不要在正文里重复工具参数。
 """
+
+
+_DISPATCHER_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "schedule_reply",
+            "description": "调度一个最适合的角色回复当前群聊。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "character": {"type": "string", "description": "要发言的角色名"},
+                    "strategy": {"type": "string", "description": "给角色的简短回复策略"},
+                    "reason": {"type": "string", "description": "调度理由"},
+                    "chat_state": {
+                        "type": "string",
+                        "enum": ["active", "winding_down", "terminated"],
+                        "description": "执行后的对话状态",
+                    },
+                },
+                "required": ["character", "reason"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "schedule_chain",
+            "description": "按顺序调度多个角色接力发言。只在确实需要多人互动时使用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "characters": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "按发言顺序排列的角色名",
+                    },
+                    "strategy": {"type": "string", "description": "给整条对话链的简短策略"},
+                    "reason": {"type": "string", "description": "调度理由"},
+                    "chat_state": {
+                        "type": "string",
+                        "enum": ["active", "winding_down", "terminated"],
+                    },
+                },
+                "required": ["characters", "reason"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "skip_response",
+            "description": "不调度任何角色发言。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "description": "跳过理由"},
+                    "chat_state": {
+                        "type": "string",
+                        "enum": ["active", "winding_down", "terminated"],
+                    },
+                },
+                "required": ["reason"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "terminate_dialogue",
+            "description": "终止本轮对话，等待后续新消息重新激活。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "description": "终止理由"},
+                },
+                "required": ["reason"],
+            },
+        },
+    },
+]
 
 
 # ── 5个积极性预设 ──
@@ -193,7 +255,8 @@ DISPATCHER_PRESETS: dict[str, dict] = {
 
 
 def get_dispatcher_prompt(characters_info: str, message_count: int,
-                          recent_messages: str, chat_state: str) -> str:
+                          recent_messages: str, chat_state: str,
+                          scheduler_state: str) -> str:
     """根据配置构建调度器提示词"""
     custom_prompt = config.orchestrator.dispatcher.dispatcher_prompt
     preset_key = config.orchestrator.dispatcher.dispatcher_preset
@@ -205,6 +268,7 @@ def get_dispatcher_prompt(characters_info: str, message_count: int,
             message_count=message_count,
             recent_messages=recent_messages,
             chat_state=chat_state,
+            scheduler_state=scheduler_state,
         )
 
     # 使用预设
@@ -214,6 +278,7 @@ def get_dispatcher_prompt(characters_info: str, message_count: int,
         message_count=message_count,
         recent_messages=recent_messages,
         chat_state=chat_state,
+        scheduler_state=scheduler_state,
         enthusiasm_instruction=preset["enthusiasm_instruction"],
     )
 
@@ -303,6 +368,7 @@ class Dispatcher:
         for msg in messages[-20:]:  # 最多取20条
             recent_messages.append(f"[{msg.sender_name}]: {msg.raw_message}")
         messages_text = "\n".join(recent_messages)
+        scheduler_state = self._build_scheduler_state(messages)
         
         # 构建完整 prompt
         prompt = get_dispatcher_prompt(
@@ -310,23 +376,27 @@ class Dispatcher:
             message_count=len(messages),
             recent_messages=messages_text,
             chat_state=chat_state,
+            scheduler_state=scheduler_state,
         )
         
         # 调用辅助模型
         try:
-            response = await llm_client.generate_assistant_response(
+            response = await llm_client.generate_dispatcher_decision(
                 system_prompt=prompt,
                 messages=[],
                 temperature=config.orchestrator.dispatcher.assistant_temperature,
                 max_tokens=config.orchestrator.dispatcher.assistant_max_tokens,
+                tools=_DISPATCHER_TOOLS,
+                tool_choice="required",
             )
             
-            if not response:
-                logger.warning("Assistant model returned empty response")
+            if not response or not response.tool_calls:
+                logger.warning("Assistant model returned no dispatcher tool call")
                 return self._create_skip_decision("辅助模型无响应")
             
-            # 解析 JSON
-            decision = self._parse_decision(response)
+            group_id = messages[-1].group_id if messages else ""
+            decision = self._parse_tool_call(response.tool_calls[0])
+            decision = self._apply_mechanical_constraints(decision, group_id)
             logger.info(f"Dispatcher decision: action={decision.action}, "
                        f"character={decision.character}, reason={decision.reason}")
             return decision
@@ -334,6 +404,120 @@ class Dispatcher:
         except Exception as e:
             logger.error(f"Assistant model error: {e}")
             return self._create_skip_decision(f"辅助模型错误: {e}")
+
+    def _build_scheduler_state(self, messages: list[BufferedMessage]) -> str:
+        """把机械参数和当前可调度状态显式交给调度模型。"""
+        auto_cfg = config.orchestrator.auto_dialogue
+        now = datetime.now()
+        lines = [
+            f"group_reply_probability={config.orchestrator.group_reply_probability}",
+            f"fallback_reply_probability={get_preset_fallback_probability(config.orchestrator.dispatcher.dispatcher_preset)}",
+            f"auto_dialogue_enabled={auto_cfg.enabled}",
+            f"chain_length={auto_cfg.chain_length}",
+            f"cooldown_ms={auto_cfg.cooldown_ms}",
+            f"trigger_probability={auto_cfg.trigger_probability}",
+            f"initiation_probability={auto_cfg.initiation_probability}",
+            f"initiation_interval_ms={auto_cfg.initiation_interval_ms}",
+        ]
+
+        group_id = messages[-1].group_id if messages else ""
+        try:
+            from backend.orchestrator import orchestrator
+            for char_name in self._available_characters:
+                chain_count = orchestrator._chain_counters[group_id][char_name]
+                remaining_slots = max(auto_cfg.chain_length - chain_count, 0)
+                last_reply = orchestrator._last_ai_reply_time[group_id][char_name]
+                elapsed_ms = (now - last_reply).total_seconds() * 1000
+                cooldown_blocked = elapsed_ms < auto_cfg.cooldown_ms
+                lines.append(
+                    f"character={char_name}, chain_count={chain_count}, "
+                    f"remaining_chain_slots={remaining_slots}, cooldown_blocked={cooldown_blocked}"
+                )
+        except Exception as e:
+            logger.debug(f"Failed to build per-character scheduler state: {e}")
+
+        return "\n".join(lines)
+
+    def _parse_tool_call(self, tool_call) -> DispatcherDecision:
+        """把调度器专属 Function Calling 转为内部决策对象。"""
+        name = tool_call.function_name
+        args = tool_call.arguments or {}
+
+        if name == "schedule_reply":
+            return DispatcherDecision(
+                action="reply",
+                character=args.get("character"),
+                strategy=args.get("strategy"),
+                reason=args.get("reason", ""),
+                chat_state=args.get("chat_state", "active"),
+            )
+        if name == "schedule_chain":
+            return DispatcherDecision(
+                action="chain",
+                characters=args.get("characters", []),
+                strategy=args.get("strategy"),
+                reason=args.get("reason", ""),
+                chat_state=args.get("chat_state", "active"),
+            )
+        if name == "terminate_dialogue":
+            return DispatcherDecision(
+                action="terminate",
+                reason=args.get("reason", ""),
+                chat_state="terminated",
+            )
+        if name == "skip_response":
+            return DispatcherDecision(
+                action="skip",
+                reason=args.get("reason", ""),
+                chat_state=args.get("chat_state", "active"),
+            )
+
+        return self._create_skip_decision(f"未知调度函数: {name}")
+
+    def _apply_mechanical_constraints(self, decision: DispatcherDecision, group_id: str = "") -> DispatcherDecision:
+        """用链长、冷却和可用角色做硬约束兜底。"""
+        if decision.action == "reply":
+            if not self._is_schedulable(decision.character, group_id):
+                return self._create_skip_decision(f"角色不可调度或处于冷却: {decision.character}")
+            return decision
+
+        if decision.action == "chain":
+            auto_cfg = config.orchestrator.auto_dialogue
+            max_chain = max(1, min(auto_cfg.chain_length, 3))
+            seen = set()
+            characters = []
+            for char_name in decision.characters:
+                if char_name in seen or not self._is_schedulable(char_name, group_id):
+                    continue
+                seen.add(char_name)
+                characters.append(char_name)
+                if len(characters) >= max_chain:
+                    break
+            if not characters:
+                return self._create_skip_decision("链式调度无可用角色")
+            decision.characters = characters
+            return decision
+
+        return decision
+
+    def _is_schedulable(self, character: Optional[str], group_id: str = "") -> bool:
+        if not character or character not in self._available_characters:
+            return False
+        if not config.orchestrator.auto_dialogue.enabled:
+            return True
+        try:
+            from backend.orchestrator import orchestrator
+            auto_cfg = config.orchestrator.auto_dialogue
+            if group_id and orchestrator._chain_counters[group_id][character] >= auto_cfg.chain_length:
+                return False
+            if group_id:
+                last_reply = orchestrator._last_ai_reply_time[group_id][character]
+                elapsed_ms = (datetime.now() - last_reply).total_seconds() * 1000
+                if elapsed_ms < auto_cfg.cooldown_ms:
+                    return False
+        except Exception as e:
+            logger.debug(f"Failed to check schedulable state: {e}")
+        return True
     
     def _parse_decision(self, response: str) -> DispatcherDecision:
         """解析辅助模型的 JSON 输出"""
@@ -422,7 +606,7 @@ class Dispatcher:
             if decision.character:
                 await orchestrator.execute_reply(
                     group_id=group_id,
-                    character=decision.character,
+                    character_name=decision.character,
                     strategy=decision.strategy,
                     trigger_message=messages[-1] if messages else None,
                 )
@@ -437,7 +621,7 @@ class Dispatcher:
                 
                 await orchestrator.execute_reply(
                     group_id=group_id,
-                    character=char,
+                    character_name=char,
                     strategy=decision.strategy,
                     trigger_message=messages[-1] if messages else None,
                 )
@@ -463,7 +647,7 @@ class Dispatcher:
             if f"@{char_name}" in last_msg.raw_message or char_name in last_msg.raw_message:
                 await orchestrator.execute_reply(
                     group_id=group_id,
-                    character=char_name,
+                    character_name=char_name,
                     trigger_message=last_msg,
                 )
                 return
@@ -477,7 +661,7 @@ class Dispatcher:
                 char = random.choice(self._available_characters)
                 await orchestrator.execute_reply(
                     group_id=group_id,
-                    character=char,
+                    character_name=char,
                     trigger_message=last_msg,
                 )
     

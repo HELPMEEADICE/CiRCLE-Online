@@ -981,6 +981,9 @@ class Orchestrator:
                     character=character_name,
                 ))
                 await self._send_reply(port, group_id, reply_text)
+                if config.orchestrator.auto_dialogue.enabled:
+                    self._last_ai_reply_time[group_id][character_name] = datetime.now()
+                    self._chain_counters[group_id][character_name] += 1
 
     async def handle_ai_reply(self, port: int, group_id: str, responding_character: str,
                               reply_text: str, depth: int = 0):

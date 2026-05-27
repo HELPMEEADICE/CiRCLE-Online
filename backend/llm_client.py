@@ -289,11 +289,59 @@ class LLMClient:
         messages: list[ChatMessage],
         temperature: float = None,
         max_tokens: int = None,
-    ) -> Optional[str]:
-        """调用辅助模型生成分配器决策（与 generate_assistant_response 相同，但语义更清晰）"""
-        return await self.generate_assistant_response(
-            system_prompt, messages, temperature, max_tokens
-        )
+        tools: list[dict] = None,
+        tool_choice: str | dict = None,
+    ) -> RoleplayResponse | None:
+        """调用辅助模型生成调度器决策。"""
+        if not tools:
+            content = await self.generate_assistant_response(
+                system_prompt, messages, temperature, max_tokens
+            )
+            if content is None:
+                return None
+            return RoleplayResponse(content=content)
+
+        if not self._client:
+            logger.error("LLM client not available")
+            return None
+
+        assistant_model = config.llm.assistant_model or config.llm.model
+        formatted_messages = [{"role": "system", "content": system_prompt}]
+        for msg in messages:
+            formatted_messages.append({"role": msg.role, "content": msg.content})
+
+        try:
+            kwargs = dict(
+                model=assistant_model,
+                messages=formatted_messages,
+                temperature=temperature if temperature is not None else config.llm.temperature,
+                max_tokens=max_tokens if max_tokens is not None else config.llm.max_tokens,
+                tools=tools,
+            )
+            if tool_choice:
+                kwargs["tool_choice"] = tool_choice
+            extra_body = self._get_extra_body(config.llm.assistant_model_thinking)
+            if extra_body:
+                kwargs["extra_body"] = extra_body
+
+            response = await self._client.chat.completions.create(**kwargs)
+            message = response.choices[0].message
+            parsed_tool_calls = []
+            if message.tool_calls:
+                for tc in message.tool_calls:
+                    try:
+                        args = json.loads(tc.function.arguments)
+                    except (json.JSONDecodeError, TypeError):
+                        args = {}
+                    parsed_tool_calls.append(ToolCall(
+                        id=tc.id,
+                        function_name=tc.function.name,
+                        arguments=args,
+                    ))
+            return RoleplayResponse(content=message.content, tool_calls=parsed_tool_calls)
+        except Exception as e:
+            logger.error(f"Dispatcher LLM API error: {e}")
+            return None
 
     async def compress_context(
         self,
