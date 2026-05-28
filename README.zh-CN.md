@@ -14,7 +14,13 @@
 
 - **🎸 多端口 WebSocket 服务器**：同时接受 5 个 NapCatQQ 客户端连接——每个乐队成员一个端口
 - **🎤 LLM 驱动角色扮演**：每个角色拥有完整的 `soul.md` 人格提示词，通过 OpenAI 兼容 API 生成消息，附带中文角色扮演指令微调
-- **🤖 自动对话**：角色可主动发起对话并相互连锁回复，仿佛在看 Poppin'Party 排练——只不过是在 QQ 群里
+- **🤖 双调度器架构**：两个独立的 AI 调度器——**对话调度器**决定谁说话，**表情调度器**决定何时用表情回应，均使用 Function Calling 实现精准控制
+- **⚡ 智能消息缓冲**：替代固定延迟的动态消息聚合。消息按群分组缓冲，1.2 秒无新消息后批量处理，避免打断正在说话的人
+- **🎭 表情回应系统**：角色可通过 `set_msg_emoji_like` 工具调用对消息添加表情回应（🐛/🐵/🐳），表情调度与对话调度并行运行
+- **🔧 Function Calling 工具**：内置管理工具（`set_group_ban` 禁言）、表情回应、图片分析（`analyze_image`）。角色不只是聊天，还能采取行动
+- **🎯 5 种调度预设**：从"静默"（几乎不说话）到"热情"（回复一切），每个预设控制回复概率和连锁行为
+- **🛡️ 至高权限模式**：当需要角色最大程度响应时，可覆盖所有机械约束（冷却、链长限制等）
+- **💬 对话状态机**：按群追踪对话状态（active/winding_down/terminated），新消息到达时自动重置
 - **🧠 会话记忆**：基于 Token 感知、SQLite 存储的上下文管理，支持自动上下文压缩。乐队不会忘记五分钟前说了什么（不像某位吉他手）
 - **📊 Material Design 3 仪表盘**：精美的 MD3 Web 界面，可监控连接状态、分配角色、调整配置、查看实时消息
 - **🔌 NapCatQQ 兼容**：通过 WebSocket 完整支持 OneBot 协议，可与任何 NapCatQQ 客户端即插即用
@@ -26,6 +32,10 @@
 ## 架构
 
 ```
+                              ┌─────────────────────────────────────┐
+                              │            消息流                   │
+                              └─────────────────────────────────────┘
+
 NapCatQQ ──WS──▶ Port 8081 ──▶ 戸山香澄  (主唱/吉他)
 NapCatQQ ──WS──▶ Port 8082 ──▶ 市谷有咲  (键盘)
 NapCatQQ ──WS──▶ Port 8083 ──▶ 山吹沙绫  (鼓手)
@@ -36,18 +46,79 @@ NapCatQQ ──WS──▶ Port 8085 ──▶ 花园多惠  (主音吉他)
               NapCatMessageHandler
                         │
                         ▼
-                  Orchestrator
-                   ├── 会话记忆 (SQLite)
-                   ├── 回复逻辑 (概率、@提及)
-                   ├── 自动对话引擎
-                   └── 上下文压缩
-                        │
-                        ▼
-                  LLMClient (AsyncOpenAI)
-                   └── 角色 soul.md + 角色扮演提示词
+                MessageBuffer (1.2秒窗口)
+                  ┌─────┴─────┐
+                  ▼           ▼
+           群 A 缓冲区    群 B 缓冲区    ... (按群隔离)
+                  │           │
+                  ▼           ▼
+               Dispatcher (双分支)
+          ┌───────┴───────┐
+          ▼               ▼
+    对话调度分支       表情调度分支
+   (Function Call)    (Function Call)
+          │               │
+          ▼               ▼
+   schedule_reply    set_msg_emoji_like
+   schedule_chain    skip_emoji_reaction
+   skip_response
+   terminate_dialogue
+          │               │
+          ▼               ▼
+      Orchestrator ────────────────► NapCat API
+       ├── 会话记忆 (SQLite)
+       ├── 上下文压缩
+       ├── 消息 ID 别名
+       └── 链计数器
+              │
+              ▼
+        LLMClient (AsyncOpenAI)
+         ├── 主模型 (角色回复)
+         ├── 辅助模型 (调度器决策)
+         └── 视觉模型 (图片分析)
 ```
 
-后端通过 WebSocket 使用 **OneBot 协议**通信。所有 5 个端口共享同一个编排器，每个群聊和私聊维护独立的会话记忆。收到消息后，编排器根据概率、@提及或角色名称提及决定每个角色是否回复以及如何回复。
+### 双调度器系统
+
+核心创新是将对话决策与表情回应分离的**双调度器架构**：
+
+**对话调度器**使用 Function Calling 决定：
+- `schedule_reply` — 一个角色应该回复
+- `schedule_chain` — 多个角色按顺序接力回复
+- `skip_response` — 不需要回复
+- `terminate_dialogue` — 终止本轮对话
+
+**表情调度器**独立并行运行：
+- `set_msg_emoji_like` — 用 🐛（下头）、🐵（无语）或 🐳（喜欢）回应
+- `skip_emoji_reaction` — 不贴表情
+
+两个调度器都使用**辅助 LLM 模型**通过 Function Calling 进行结构化决策，如果模型失败则回退到简单的概率逻辑。
+
+### 消息缓冲
+
+消息按群分组缓冲，1.2 秒无新消息后触发 flush：
+- 连续消息会重置定时器，等待对话暂停
+- 不同群的消息独立处理，互不阻塞
+- 避免打断正在说话的人，允许一次考虑多条消息
+
+### 调度预设
+
+| 预设 | 回复概率 | 行为 |
+|------|----------|------|
+| `silent` (静默) | 1% | 仅响应直接 @提及 |
+| `conservative` (保守) | 15% | 话题明显相关时才回复 |
+| `balanced` (平衡) | 30% | 适度参与，平衡活跃与克制 |
+| `active` (积极) | 50% | 乐于参与，积极接话 |
+| `enthusiastic` (热情) | 80% | 非常活跃，几乎不放过任何互动机会 |
+
+### 至高权限模式
+
+启用后（`supreme_power = true`），调度器可覆盖：
+- 回复间的冷却计时器
+- 链长度限制
+- 已终止状态限制
+
+用于需要角色最大程度响应的场景，代价是更高的 API 调用量。
 
 ---
 
@@ -118,12 +189,35 @@ python run.py
 | `[server]` | 主机、端口范围、管理端口 |
 | `[llm]` | 供应商、API Key、Base URL、模型选择 |
 | `[llm.vision]` | 独立的视觉模型配置，用于图片理解 |
-| `[orchestrator]` | 回复概率、上下文限制、延迟、提示词定制 |
-| `[orchestrator.auto_dialogue]` | 自动对话链长度、冷却时间、触发概率 |
+| `[orchestrator]` | 回复延迟、上下文限制、提示词定制 |
+| `[orchestrator.buffer]` | 消息缓冲窗口（默认 1.2 秒）、最大容量 |
+| `[orchestrator.dispatcher]` | 调度器预设、至高权限、回退行为 |
+| `[orchestrator.auto_dialogue]` | 链长度、冷却时间、触发/主动发起概率 |
 | `[orchestrator.context_compression]` | 基于 Token 的记忆压缩设置 |
 | `[chat]` | 管理员 QQ、主群号、仪表盘密码 |
 
 **角色-端口分配** 存储在 `config/ports.toml` 中，支持运行时修改（通过仪表盘或 API 分配/取消分配）。
+
+### 关键配置
+
+```toml
+[orchestrator.dispatcher]
+enabled = true                    # 启用 AI 调度器（vs 简单概率）
+supreme_power = false             # 覆盖冷却和链长限制
+fallback_to_simple = true         # 调度器失败时回退到概率逻辑
+dispatcher_preset = "balanced"    # silent/conservative/balanced/active/enthusiastic
+
+[orchestrator.buffer]
+enabled = true                    # 启用消息缓冲
+window_ms = 1200                  # 1.2 秒无新消息后 flush
+max_size = 50                     # 每个缓冲区最大消息数
+
+[orchestrator.auto_dialogue]
+enabled = true                    # 启用连锁回复
+chain_length = 3                  # 连锁中最大角色数
+cooldown_ms = 5000                # 角色回复间最小间隔
+trigger_probability = 0.5         # 其他角色加入连锁的概率
+```
 
 > **"設定を弄るのは有咲に任せろ！"** —— 说人话：直接用 MD3 仪表盘改就行。
 
@@ -161,6 +255,16 @@ python run.py
 | `GET` | `/api/orchestrator/auto-dialogue/config` | 获取自动对话配置 |
 | `POST` | `/api/orchestrator/auto-dialogue/config` | 更新自动对话配置 |
 | `POST` | `/api/orchestrator/auto-dialogue/toggle` | 切换自动对话 |
+
+### 调度器控制
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/dispatcher/config` | 获取调度器配置 |
+| `POST` | `/api/dispatcher/config` | 更新调度器配置 |
+| `GET` | `/api/dispatcher/presets` | 列出可用预设 |
+| `GET` | `/api/dispatcher/status` | 获取各群调度器状态 |
+| `POST` | `/api/dispatcher/chat-state` | 设置群对话状态 |
 
 ### 配置与消息
 
@@ -210,8 +314,10 @@ CiRCLE-Online/
 │   ├── auth.py               # Token 认证
 │   ├── websocket_server.py   # 多端口 WebSocket 服务器
 │   ├── napcat_handler.py     # OneBot 事件分发器
-│   ├── orchestrator.py       # 会话记忆、回复逻辑、自动对话
-│   ├── llm_client.py         # AsyncOpenAI 封装
+│   ├── orchestrator.py       # 会话记忆、回复逻辑、工具执行
+│   ├── dispatcher.py         # 双 AI 调度器（对话 + 表情）
+│   ├── message_buffer.py     # 按群消息聚合
+│   ├── llm_client.py         # AsyncOpenAI 封装（主模型 + 辅助模型 + 视觉模型）
 │   ├── character_manager.py  # 角色加载器（soul.md + 头像）
 │   ├── token_counter.py      # tiktoken Token 计数
 │   └── utils.py              # 日志、消息解析、工具函数
@@ -235,7 +341,8 @@ CiRCLE-Online/
 │   └── ports.toml            # 端口-角色分配
 │
 ├── data/
-│   └── chat_history.db       # SQLite 数据库（自动创建）
+│   ├── chat_history.db       # SQLite 数据库（自动创建）
+│   └── Context_Compression.md # 压缩的上下文摘要
 │
 └── tests/
     ├── test_basic.py         # 单元测试（配置、角色、模型）
@@ -247,7 +354,7 @@ CiRCLE-Online/
 ## 开发相关 FAQ
 
 **问：角色为什么从来不回复？**
-答：检查 `group_reply_probability` 配置（默认 0.3）。也有可能是有咲在无视你——这很符合人设。
+答：检查 `dispatcher_preset` 配置。用 "enthusiastic" 可以获得最大响应率，或者启用 `supreme_power` 来覆盖所有冷却限制。也有可能是有咲在无视你——这很符合人设。
 
 **问：我能添加自己的角色吗？**
 答：可以！在 `characters/` 下创建一个目录，里面放一个 `soul.md` 文件。目录名就是角色名。然后调用 `POST /api/reload-characters` 或重启服务。不用献祭拨片给上古之神。
@@ -264,6 +371,18 @@ CiRCLE-Online/
 **问：角色能看懂图片吗？**
 答：如果配置了视觉模型就能。多惠终于可以看清那张糊掉的吉他谱照片了。至于她会不会告你答案——那是另一回事。
 
+**问：主模型和辅助模型有什么区别？**
+答：**主模型**负责生成角色回复（角色扮演响应）。**辅助模型**驱动调度器——使用 Function Calling 决定谁该说话、什么时候说话。你可以为两者使用不同的模型（例如调度用快速模型，反应用创意模型）。
+
+**问：为什么角色有时用表情回应而不是说话？**
+答：表情调度器与对话调度器并行运行。有时候一个 🐛（下头）、🐵（无语）或 🐳（喜欢）比完整回复更合适。角色也可以通过 `set_msg_emoji_like` 工具在文字回复的同时添加表情。
+
+**问："supreme_power"（至高权限）是做什么的？**
+答：就像给香澄灌了无限能量饮料。启用后，调度器可以无视冷却计时器、链长限制和已终止状态。适合活动场景或需要最大程度混乱的时候使用。
+
+**问：消息缓冲机制是怎么工作的？**
+答：系统不会立即响应每条消息，而是按群分组缓冲。1.2 秒无新消息（可配置）后，缓冲的消息会被批量发送给调度器。这样可以避免打断正在说话的人，并允许一次考虑多条消息。
+
 ---
 
 ## 技术栈
@@ -273,11 +392,12 @@ CiRCLE-Online/
 | 后端 | Python 3.10+, FastAPI, Uvicorn |
 | WebSocket | websockets 库（legacy server API） |
 | 数据库 | aiosqlite（SQLite） |
-| LLM 客户端 | OpenAI SDK（AsyncOpenAI） |
+| LLM 客户端 | OpenAI SDK（AsyncOpenAI）— 主模型 + 辅助模型 + 视觉模型 |
 | Token 计数 | tiktoken（cl100k_base） |
 | 前端 | HTML + CSS + JS, Material Design 3 |
 | 认证 | HMAC Token（24 小时有效期） |
 | 协议 | OneBot v11（NapCatQQ） |
+| 调度器 | 基于 Function Calling 的 AI 决策引擎 |
 
 ---
 

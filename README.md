@@ -14,7 +14,13 @@ Built with **FastAPI** + **Material Design 3** frontend, because even band manag
 
 - **🎸 Multi-Port WebSocket Server**: Accepts connections from 5 NapCatQQ clients simultaneously — one for each band member.
 - **🎤 LLM-Powered Character Roleplay**: Each character has a full `soul.md` personality prompt. Messages are generated via OpenAI-compatible API with Chinese roleplay instruction tuning.
-- **🤖 Auto-Dialogue**: Characters can initiate conversations proactively and chain-reply to each other. It's like watching *Poppin'Party* practice, but in a QQ group.
+- **🤖 Dual-Dispatcher Architecture**: Two independent AI dispatchers — **Dialogue Dispatcher** decides who speaks, **Emoji Dispatcher** decides when to react with emoji. Both use Function Calling for precise control.
+- **⚡ Smart Message Buffering**: Replaces fixed delays with dynamic message aggregation. Messages are buffered per-group and flushed after 1.2s of silence, preventing split conversations.
+- **🎭 Emoji Reaction System**: Characters can react to messages with emoji (🐛/🐵/🐳) via `set_msg_emoji_like` tool calls. Emoji dispatch runs in parallel with dialogue dispatch.
+- **🔧 Function Calling Tools**: Built-in tools for moderation (`set_group_ban`), emoji reactions, and image analysis (`analyze_image`). Characters can take actions, not just talk.
+- **🎯 5 Dispatcher Presets**: From "silent" (almost never speaks) to "enthusiastic" (replies to everything). Each preset controls reply probability and chain behavior.
+- **🛡️ Supreme Power Mode**: Override all mechanical constraints (cooldowns, chain limits) when you want characters to be maximally responsive.
+- **💬 Dialogue State Machine**: Tracks conversation state (active/winding_down/terminated) per group. Automatically resets when new messages arrive.
 - **🧠 Session Memory**: Token-aware, SQLite-backed context management with automatic context compression. The band doesn't forget what happened 5 minutes ago (unlike some guitarists).
 - **📊 Material Design 3 Dashboard**: Beautiful MD3 web UI for monitoring connections, assigning characters, tweaking config, and viewing real-time messages.
 - **🔌 NapCatQQ Compatible**: Full OneBot protocol support via WebSocket. Drop-in integration with any NapCatQQ client.
@@ -26,6 +32,10 @@ Built with **FastAPI** + **Material Design 3** frontend, because even band manag
 ## Architecture
 
 ```
+                              ┌─────────────────────────────────────┐
+                              │         Message Flow                │
+                              └─────────────────────────────────────┘
+
 NapCatQQ ──WS──▶ Port 8081 ──▶ 戸山香澄  (Vocalist/Guitar)
 NapCatQQ ──WS──▶ Port 8082 ──▶ 市谷有咲  (Keyboard)
 NapCatQQ ──WS──▶ Port 8083 ──▶ 山吹沙绫  (Drummer)
@@ -36,18 +46,79 @@ NapCatQQ ──WS──▶ Port 8085 ──▶ 花园多惠  (Lead Guitar)
               NapCatMessageHandler
                         │
                         ▼
-                  Orchestrator
-                   ├── Session Memory (SQLite)
-                   ├── Reply Logic (probability, @mentions)
-                   ├── Auto-Dialogue Engine
-                   └── Context Compression
-                        │
-                        ▼
-                  LLMClient (AsyncOpenAI)
-                   └── Character soul.md + Roleplay Prompt
+                MessageBuffer (1.2s window)
+                  ┌─────┴─────┐
+                  ▼           ▼
+           Group A Buffer  Group B Buffer  ... (per-group isolation)
+                  │           │
+                  ▼           ▼
+               Dispatcher (Dual-Branch)
+          ┌───────┴───────┐
+          ▼               ▼
+   Dialogue Branch    Emoji Branch
+   (Function Call)    (Function Call)
+          │               │
+          ▼               ▼
+   schedule_reply    set_msg_emoji_like
+   schedule_chain    skip_emoji_reaction
+   skip_response
+   terminate_dialogue
+          │               │
+          ▼               ▼
+      Orchestrator ────────────────► NapCat API
+       ├── Session Memory (SQLite)
+       ├── Context Compression
+       ├── Message ID Aliases
+       └── Chain Counters
+              │
+              ▼
+        LLMClient (AsyncOpenAI)
+         ├── Main Model (character replies)
+         ├── Assistant Model (dispatcher decisions)
+         └── Vision Model (image analysis)
 ```
 
-The backend speaks **OneBot protocol** over WebSocket. All 5 ports share the same orchestrator, which maintains independent session memories per group and per private chat. When a message comes in, the orchestrator decides (based on probability, @mentions, or character name mentions) whether and how each character should reply.
+### Dual-Dispatcher System
+
+The core innovation is the **dual-dispatcher architecture** that separates dialogue decisions from emoji reactions:
+
+**Dialogue Dispatcher** uses Function Calling to decide:
+- `schedule_reply` — One character should respond
+- `schedule_chain` — Multiple characters should respond in sequence
+- `skip_response` — No response needed
+- `terminate_dialogue` — End the conversation
+
+**Emoji Dispatcher** runs in parallel and independently decides:
+- `set_msg_emoji_like` — React with 🐛 (cringe), 🐵 (confused), or 🐳 (like)
+- `skip_emoji_reaction` — No emoji needed
+
+Both dispatchers use a **secondary LLM model** with Function Calling for structured decision-making, with fallback to simple probability-based logic if the model fails.
+
+### Message Buffering
+
+Messages are buffered per-group with a 1.2s idle window:
+- Continuous messages reset the timer, waiting for the conversation to pause
+- Different groups process independently without blocking each other
+- Prevents the bot from responding to split messages mid-sentence
+
+### Dispatcher Presets
+
+| Preset | Reply Probability | Behavior |
+|--------|-------------------|----------|
+| `silent` | 1% | Only responds to direct @mentions |
+| `conservative` | 15% | Replies when topic clearly relates to character |
+| `balanced` | 30% | Moderate participation, balances activity and restraint |
+| `active` | 50% | Enjoys participating, readily joins conversations |
+| `enthusiastic` | 80% | Very active, rarely misses a chance to interact |
+
+### Supreme Power Mode
+
+When enabled (`supreme_power = true`), the dispatcher can override:
+- Cooldown timers between replies
+- Chain length limits
+- Terminated state restrictions
+
+Use this for maximum character responsiveness at the cost of higher API usage.
 
 ---
 
@@ -118,12 +189,35 @@ All settings live in `config/settings.toml`. Config sections:
 | `[server]` | Host, port range, management port |
 | `[llm]` | Provider, API key, base URL, model selection |
 | `[llm.vision]` | Separate vision model config for image understanding |
-| `[orchestrator]` | Reply probability, context limits, delay, prompt customization |
-| `[orchestrator.auto_dialogue]` | Auto-dialogue chain length, cooldown, trigger probability |
+| `[orchestrator]` | Reply delay, context limits, prompt customization |
+| `[orchestrator.buffer]` | Message buffer window (default 1.2s), max size |
+| `[orchestrator.dispatcher]` | Dispatcher preset, supreme power, fallback behavior |
+| `[orchestrator.auto_dialogue]` | Chain length, cooldown, trigger/initiation probability |
 | `[orchestrator.context_compression]` | Token-aware memory compression settings |
 | `[chat]` | Admin QQ, main group ID, dashboard password |
 
 **Character-to-port assignments** are stored in `config/ports.toml` and are writable at runtime (assign/unassign via the dashboard or API).
+
+### Key Configuration
+
+```toml
+[orchestrator.dispatcher]
+enabled = true                    # Enable AI dispatcher (vs simple probability)
+supreme_power = false             # Override cooldowns and chain limits
+fallback_to_simple = true         # Fall back to probability if dispatcher fails
+dispatcher_preset = "balanced"    # silent/conservative/balanced/active/enthusiastic
+
+[orchestrator.buffer]
+enabled = true                    # Enable message buffering
+window_ms = 1200                  # Flush after 1.2s of silence
+max_size = 50                     # Max messages per buffer
+
+[orchestrator.auto_dialogue]
+enabled = true                    # Enable chain replies
+chain_length = 3                  # Max characters in a chain
+cooldown_ms = 5000                # Min time between character replies
+trigger_probability = 0.5         # Chance another character joins
+```
 
 > **"設定を弄るのは有咲に任せろ！"** — actually, just use the MD3 dashboard.
 
@@ -161,6 +255,16 @@ All settings live in `config/settings.toml`. Config sections:
 | `GET` | `/api/orchestrator/auto-dialogue/config` | Get auto-dialogue settings |
 | `POST` | `/api/orchestrator/auto-dialogue/config` | Update auto-dialogue settings |
 | `POST` | `/api/orchestrator/auto-dialogue/toggle` | Toggle auto-dialogue |
+
+### Dispatcher Control
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/dispatcher/config` | Get dispatcher settings |
+| `POST` | `/api/dispatcher/config` | Update dispatcher settings |
+| `GET` | `/api/dispatcher/presets` | List available presets |
+| `GET` | `/api/dispatcher/status` | Get dispatcher state per group |
+| `POST` | `/api/dispatcher/chat-state` | Set chat state for a group |
 
 ### Config & Messages
 
@@ -210,8 +314,10 @@ CiRCLE-Online/
 │   ├── auth.py               # Token-based dashboard auth
 │   ├── websocket_server.py   # Multi-port WebSocket server
 │   ├── napcat_handler.py     # OneBot event dispatcher
-│   ├── orchestrator.py       # Session memory, reply logic, auto-dialogue
-│   ├── llm_client.py         # AsyncOpenAI wrapper
+│   ├── orchestrator.py       # Session memory, reply logic, tool execution
+│   ├── dispatcher.py         # Dual AI dispatcher (dialogue + emoji)
+│   ├── message_buffer.py     # Per-group message aggregation
+│   ├── llm_client.py         # AsyncOpenAI wrapper (main + assistant + vision)
 │   ├── character_manager.py  # Character loader (soul.md + avatar)
 │   ├── token_counter.py      # tiktoken-based token counting
 │   └── utils.py              # Logging, message parsing, helpers
@@ -235,7 +341,8 @@ CiRCLE-Online/
 │   └── ports.toml            # Port-to-character assignments
 │
 ├── data/
-│   └── chat_history.db       # SQLite (auto-created)
+│   ├── chat_history.db       # SQLite (auto-created)
+│   └── Context_Compression.md # Compressed context summaries
 │
 └── tests/
     ├── test_basic.py         # Unit tests (config, chars, models)
@@ -247,7 +354,7 @@ CiRCLE-Online/
 ## FAQ (Featuring the Band)
 
 **Q: Why does my character never reply?**
-A: Check `group_reply_probability` in config (default 0.3). Or maybe Arisa is just ignoring you — it's in-character.
+A: Check `dispatcher_preset` in config. Use "enthusiastic" for maximum responsiveness, or enable `supreme_power` to override all cooldowns. Or maybe Arisa is just ignoring you — it's in-character.
 
 **Q: Can I add my own characters?**
 A: Yes! Create a directory under `characters/` with a `soul.md` file. The directory name becomes the character name. Then call `POST /api/reload-characters` or restart. No need to sacrifice a guitar pick to the elder gods.
@@ -264,6 +371,18 @@ A: Because someone (花园多惠) was probably distracted by a rabbit. Set env v
 **Q: Can the characters see images?**
 A: If vision model is configured, yes. Tae can finally understand what that blurry guitar tab photo is. Whether she'll *tell* you is another matter.
 
+**Q: What's the difference between the main model and assistant model?**
+A: The **main model** generates character replies (roleplay responses). The **assistant model** powers the dispatcher — it decides who should speak and when, using Function Calling. You can use different models for each (e.g., a fast model for dispatch, a creative model for replies).
+
+**Q: Why do characters sometimes react with emoji instead of replying?**
+A: The emoji dispatcher runs in parallel with the dialogue dispatcher. Sometimes a 🐛 (cringe), 🐵 (confused), or 🐳 (like) is more appropriate than a full reply. Characters can also add emoji alongside their text replies via the `set_msg_emoji_like` tool.
+
+**Q: What does "supreme_power" do?**
+A: It's like giving Kasumi unlimited energy drinks. When enabled, the dispatcher can ignore cooldown timers, chain length limits, and terminated states. Use it for events or when you want maximum chaos.
+
+**Q: How does message buffering work?**
+A: Instead of responding immediately to each message, the system buffers messages per-group. After 1.2 seconds of silence (configurable), the buffered messages are flushed to the dispatcher. This prevents the bot from interrupting mid-conversation and allows it to consider multiple messages at once.
+
 ---
 
 ## Tech Stack
@@ -273,11 +392,12 @@ A: If vision model is configured, yes. Tae can finally understand what that blur
 | Backend | Python 3.10+, FastAPI, Uvicorn |
 | WebSocket | websockets library (legacy server API) |
 | Database | aiosqlite (SQLite) |
-| LLM Client | OpenAI SDK (AsyncOpenAI) |
+| LLM Client | OpenAI SDK (AsyncOpenAI) — main + assistant + vision models |
 | Token Counting | tiktoken (cl100k_base) |
 | Frontend | HTML + CSS + JS, Material Design 3 |
 | Auth | HMAC token-based (24h TTL) |
 | Protocol | OneBot v11 (NapCatQQ) |
+| Dispatcher | Function Calling-based AI decision engine |
 
 ---
 
