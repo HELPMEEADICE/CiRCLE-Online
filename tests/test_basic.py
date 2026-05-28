@@ -426,7 +426,7 @@ async def test_execute_reply_generates_text_after_emoji_only_tool_call(monkeypat
     async def fake_send_reply(port, group_id, reply_text):
         sent_replies.append((port, group_id, reply_text))
 
-    async def fake_execute_tool_calls(tool_calls, group_id, port, is_private=False, context_message_id=0):
+    async def fake_execute_tool_calls(tool_calls, group_id, port, is_private=False, context_message_id=0, pending_emojis=None):
         return ["[set_msg_emoji_like] 已添加表情回应 🐳"]
 
     async def fake_generate_roleplay_response(character_prompt, context, user_message, character_name="", tools=None):

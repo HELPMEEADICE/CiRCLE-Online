@@ -696,9 +696,13 @@ class Orchestrator:
 
         if response:
             tool_results = []
+            pending_emojis = []
             if response.tool_calls:
                 self._remember_message_id_aliases(group_id, data.get("_message_ids_by_port"), port, message_id)
-                tool_results = await self._execute_tool_calls(response.tool_calls, group_id, port, is_private=False, context_message_id=message_id)
+                tool_results = await self._execute_tool_calls(response.tool_calls, group_id, port, is_private=False, context_message_id=message_id, pending_emojis=pending_emojis)
+
+            if pending_emojis:
+                asyncio.create_task(self.dispatch_emoji_reactions(group_id, character_name, pending_emojis, message_id))
 
             reply_text = await self._resolve_group_reply_text(
                 response=response,
@@ -945,7 +949,7 @@ class Orchestrator:
             character_name=character_name,
         )
 
-    async def _execute_tool_calls(self, tool_calls, group_id: str, port: int, is_private: bool = False, context_message_id: int = 0) -> list[str]:
+    async def _execute_tool_calls(self, tool_calls, group_id: str, port: int, is_private: bool = False, context_message_id: int = 0, pending_emojis: list | None = None) -> list[str]:
         results = []
         for tc in tool_calls:
             if tc.function_name == "set_group_ban":
@@ -991,46 +995,17 @@ class Orchestrator:
                             logger.error(f"[BAN ERROR] group={target_group} user={target_user} duration={duration} error={e}")
             elif tc.function_name == "set_msg_emoji_like":
                 msg_id = context_message_id or tc.arguments.get("message_id", 0)
-                msg_id = self._resolve_message_id_for_port(group_id, msg_id, port)
                 emoji_id = tc.arguments.get("emoji_id", "")
                 if not msg_id or not emoji_id:
                     results.append(f"[set_msg_emoji_like] 缺少参数")
                     continue
-                conn = self._ws_server.get_connection(port) if self._ws_server else None
-                if not conn:
-                    results.append(f"[set_msg_emoji_like] 无法连接到端口{port}")
-                    continue
-                max_retries = 2
-                for attempt in range(max_retries + 1):
-                    try:
-                        resp = await conn.send_action("set_msg_emoji_like", {
-                            "message_id": msg_id,
-                            "emoji_id": emoji_id,
-                        }, timeout=30.0)
-                        status = resp.get("status", "unknown")
-                        retcode = resp.get("retcode", -1)
-                        if status == "ok" and retcode == 0:
-                            emoji_names = {"128027": "🐛", "128053": "🐵", "128051": "🐳"}
-                            emoji_display = emoji_names.get(emoji_id, emoji_id)
-                            results.append(f"[set_msg_emoji_like] 已添加表情回应 {emoji_display}")
-                            logger.info(f"[EMOJI] message={msg_id} emoji={emoji_id}")
-                            break
-                        else:
-                            if attempt < max_retries:
-                                logger.warning(f"[EMOJI RETRY] message={msg_id} emoji={emoji_id} attempt={attempt+1} response={resp}")
-                                await asyncio.sleep(2)
-                                continue
-                            else:
-                                results.append(f"[set_msg_emoji_like] 失败: {resp.get('message', '未知错误')}")
-                                logger.error(f"[EMOJI FAILED] message={msg_id} emoji={emoji_id} response={resp}")
-                    except Exception as e:
-                        if attempt < max_retries:
-                            logger.warning(f"[EMOJI RETRY] message={msg_id} emoji={emoji_id} attempt={attempt+1} error={e}")
-                            await asyncio.sleep(2)
-                            continue
-                        else:
-                            results.append(f"[set_msg_emoji_like] 执行异常: {e}")
-                            logger.error(f"[EMOJI ERROR] message={msg_id} emoji={emoji_id} error={e}")
+                if pending_emojis is not None:
+                    pending_emojis.append({"message_id": int(msg_id), "emoji_id": emoji_id})
+                    results.append(f"[set_msg_emoji_like] 已加入待执行队列")
+                else:
+                    resolved_id = self._resolve_message_id_for_port(group_id, int(msg_id), port)
+                    result = await self._execute_emoji_on_port(port, group_id, resolved_id, emoji_id)
+                    results.append(result)
             elif tc.function_name == "analyze_image":
                 image_url = tc.arguments.get("image_url", "")
                 message_id = tc.arguments.get("message_id", 0)
@@ -1044,6 +1019,65 @@ class Orchestrator:
             else:
                 results.append(f"[{tc.function_name}] 未知的工具调用")
         return results
+
+    async def _execute_emoji_on_port(self, port: int, group_id: str, message_id: int, emoji_id: str) -> str:
+        """在指定端口执行表情回应（含重试逻辑）"""
+        conn = self._ws_server.get_connection(port) if self._ws_server else None
+        if not conn:
+            return f"[set_msg_emoji_like] 无法连接到端口{port}"
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            try:
+                resp = await conn.send_action("set_msg_emoji_like", {
+                    "message_id": message_id,
+                    "emoji_id": emoji_id,
+                }, timeout=30.0)
+                status = resp.get("status", "unknown")
+                retcode = resp.get("retcode", -1)
+                if status == "ok" and retcode == 0:
+                    emoji_names = {"128027": "🐛", "128053": "🐵", "128051": "🐳"}
+                    emoji_display = emoji_names.get(emoji_id, emoji_id)
+                    logger.info(f"[EMOJI] port={port} message={message_id} emoji={emoji_id}")
+                    return f"[set_msg_emoji_like] 已添加表情回应 {emoji_display}"
+                else:
+                    if attempt < max_retries:
+                        logger.warning(f"[EMOJI RETRY] port={port} message={message_id} emoji={emoji_id} attempt={attempt+1} response={resp}")
+                        await asyncio.sleep(2)
+                        continue
+                    else:
+                        logger.error(f"[EMOJI FAILED] port={port} message={message_id} emoji={emoji_id} response={resp}")
+                        return f"[set_msg_emoji_like] 失败: {resp.get('message', '未知错误')}"
+            except Exception as e:
+                if attempt < max_retries:
+                    logger.warning(f"[EMOJI RETRY] port={port} message={message_id} emoji={emoji_id} attempt={attempt+1} error={e}")
+                    await asyncio.sleep(2)
+                    continue
+                else:
+                    logger.error(f"[EMOJI ERROR] port={port} message={message_id} emoji={emoji_id} error={e}")
+                    return f"[set_msg_emoji_like] 执行异常: {e}"
+        return f"[set_msg_emoji_like] 执行失败（重试耗尽）"
+
+    async def dispatch_emoji_reactions(self, group_id: str, character_name: str, pending_emojis: list[dict], context_message_id: int = 0):
+        """将待执行的表情回应交给调度器选择账号执行"""
+        if not pending_emojis:
+            return
+        try:
+            from backend.dispatcher import get_dispatcher
+            dispatcher = get_dispatcher()
+            if dispatcher:
+                await dispatcher.dispatch_emoji(group_id, character_name, pending_emojis, self, context_message_id)
+            else:
+                port = self._find_port_for_character(character_name)
+                if not port:
+                    logger.warning(f"[EMOJI DISPATCH] No port for character {character_name}")
+                    return
+                for emoji_call in pending_emojis:
+                    raw_id = emoji_call["message_id"]
+                    emoji_id = emoji_call["emoji_id"]
+                    resolved_id = self._resolve_message_id_for_port(group_id, raw_id, port)
+                    await self._execute_emoji_on_port(port, group_id, resolved_id, emoji_id)
+        except Exception as e:
+            logger.error(f"[EMOJI DISPATCH] Error dispatching emoji reactions: {e}")
 
     async def _analyze_image_async(self, image_url: str, message_id: int, group_id: str, is_private: bool = False):
         """异步执行图片分析，并将结果注入到会话中"""
@@ -1202,8 +1236,13 @@ class Orchestrator:
         
         if response:
             tool_results = []
+            pending_emojis = []
             if response.tool_calls:
-                tool_results = await self._execute_tool_calls(response.tool_calls, group_id, port, is_private=False)
+                tool_results = await self._execute_tool_calls(response.tool_calls, group_id, port, is_private=False, pending_emojis=pending_emojis)
+
+            trigger_msg_id = trigger_message.message_id if trigger_message else 0
+            if pending_emojis:
+                asyncio.create_task(self.dispatch_emoji_reactions(group_id, character_name, pending_emojis, trigger_msg_id))
 
             reply_text = await self._resolve_group_reply_text(
                 response=response,

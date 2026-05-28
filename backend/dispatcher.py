@@ -826,6 +826,35 @@ class Dispatcher:
             "available_characters": self._available_characters.copy(),
         }
 
+    async def dispatch_emoji(self, group_id: str, character_name: str,
+                             pending_emojis: list[dict], orchestrator,
+                             context_message_id: int = 0):
+        """选择账号执行表情回应。
+
+        优先用发起角色的账号；如果该账号不可用，回退到任意可用账号。
+        """
+        if not pending_emojis:
+            return
+
+        port = orchestrator._find_port_for_character(character_name)
+        if not port or not orchestrator._ws_server or not orchestrator._ws_server.get_connection(port):
+            # 回退：找任意已连接的端口
+            if orchestrator._ws_server:
+                for p, conn in orchestrator._ws_server.connections.items():
+                    if conn:
+                        port = p
+                        break
+        if not port:
+            logger.warning(f"[EMOJI DISPATCH] No available port for emoji reaction")
+            return
+
+        for emoji_call in pending_emojis:
+            raw_id = emoji_call["message_id"]
+            emoji_id = emoji_call["emoji_id"]
+            resolved_id = orchestrator._resolve_message_id_for_port(group_id, raw_id, port)
+            result = await orchestrator._execute_emoji_on_port(port, group_id, resolved_id, emoji_id)
+            logger.info(f"[EMOJI DISPATCH] character={character_name} port={port} result={result}")
+
 
 # 全局实例
 _dispatcher: Optional[Dispatcher] = None
