@@ -185,6 +185,68 @@ _DISPATCHER_TOOLS = [
 ]
 
 
+_EMOJI_DISPATCHER_PROMPT_TEMPLATE = """你是一个群聊表情调度器，只负责决定是否给最近消息贴表情回应。
+
+## 可用角色
+{characters_info}
+
+## 最近消息（{message_count}条）
+{recent_messages}
+
+## 可用表情
+- 128027: 🐛，用于调侃、吐槽、整活
+- 128053: 🐵，用于搞怪、尴尬、看戏
+- 128051: 🐳，用于赞同、温和鼓励、轻松回应
+
+## 规则
+- 你只负责表情，不负责文字回复调度。
+- 如果最近消息不适合贴表情，必须调用 skip_emoji_reaction。
+- 如果适合贴表情，调用 set_msg_emoji_like；最多选择3条消息。
+- 优先给最新、最有梗、最需要轻量回应的用户消息贴表情。
+- 不要给明显严肃、求助、争吵、敏感内容乱贴表情。
+- message_id_self 必须使用最近消息里给出的值。
+"""
+
+
+_EMOJI_DISPATCHER_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "set_msg_emoji_like",
+            "description": "给指定群消息添加一个表情回应。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "character": {"type": "string", "description": "代表哪个角色执行该表情回应"},
+                    "message_id_self": {"type": "integer", "description": "最近消息中标注的内部消息ID"},
+                    "emoji_id": {
+                        "type": "string",
+                        "enum": ["128027", "128053", "128051"],
+                        "description": "要添加的表情ID",
+                    },
+                    "reason": {"type": "string", "description": "贴表情理由"},
+                },
+                "required": ["message_id_self", "emoji_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "skip_emoji_reaction",
+            "description": "不贴任何表情。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "description": "跳过理由"},
+                },
+                "required": ["reason"],
+            },
+        },
+    },
+]
+
+
 # ── 5个积极性预设 ──
 DISPATCHER_PRESETS: dict[str, dict] = {
     "silent": {
@@ -304,6 +366,7 @@ class Dispatcher:
     def __init__(self):
         self._chat_states: dict[str, str] = {}  # group_id → chat_state
         self._locks: dict[str, asyncio.Lock] = {}
+        self._emoji_locks: dict[str, asyncio.Lock] = {}
         self._available_characters: list[str] = []
     
     def set_available_characters(self, characters: list[str]):
@@ -390,6 +453,17 @@ class Dispatcher:
     async def on_flush(self, group_id: str, messages: list[BufferedMessage]):
         """消息缓冲区 flush 回调"""
         if not config.orchestrator.dispatcher.enabled:
+            await self._fallback_decision(group_id, messages)
+            return
+
+        await asyncio.gather(
+            self._dispatch_emoji_tools(group_id, messages),
+            self._dispatch_dialogue(group_id, messages),
+        )
+
+    async def _dispatch_dialogue(self, group_id: str, messages: list[BufferedMessage]):
+        """对话调度分支：只决定是否、由谁发文字回复。"""
+        if not config.orchestrator.dispatcher.enabled:
             # 如果分配器禁用，使用简单逻辑
             await self._fallback_decision(group_id, messages)
             return
@@ -427,6 +501,20 @@ class Dispatcher:
                 # Fallback 到简单判断
                 if config.orchestrator.dispatcher.fallback_to_simple:
                     await self._fallback_decision(group_id, messages)
+
+    async def _dispatch_emoji_tools(self, group_id: str, messages: list[BufferedMessage]):
+        """表情调度分支：独立决定并执行 set_msg_emoji_like。"""
+        if not messages or not self._available_characters:
+            return
+
+        if group_id not in self._emoji_locks:
+            self._emoji_locks[group_id] = asyncio.Lock()
+
+        async with self._emoji_locks[group_id]:
+            try:
+                await self._analyze_and_execute_emojis(group_id, messages)
+            except Exception as e:
+                logger.error(f"Emoji dispatcher error for group {group_id}: {e}")
     
     async def _analyze(self, messages: list[BufferedMessage], chat_state: str) -> DispatcherDecision:
         """调用辅助模型分析"""
@@ -500,6 +588,79 @@ class Dispatcher:
         except Exception as e:
             logger.error(f"Assistant model error: {e}")
             return self._create_skip_decision(f"辅助模型错误: {e}")
+
+    async def _analyze_and_execute_emojis(self, group_id: str, messages: list[BufferedMessage]):
+        """调用独立辅助模型判断表情回应，并立即执行工具调用。"""
+        from backend.llm_client import llm_client
+        from backend.orchestrator import orchestrator
+
+        recent_messages = []
+        message_id_self_by_index: dict[int, int] = {}
+        for index, msg in enumerate(messages[-20:], start=1):
+            message_id_self = orchestrator._remember_message_id_aliases(
+                group_id,
+                msg.data.get("_message_ids_by_port"),
+                msg.port,
+                msg.data.get("message_id", 0),
+            )
+            message_id_self_by_index[index] = message_id_self
+            recent_messages.append(
+                f"{index}. [{msg.sender_name}]: {self._resolve_message_mentions(msg)} "
+                f"[message_id_self={message_id_self}]"
+            )
+
+        prompt = _EMOJI_DISPATCHER_PROMPT_TEMPLATE.format(
+            characters_info="、".join(self._available_characters),
+            message_count=len(messages),
+            recent_messages="\n".join(recent_messages),
+        )
+
+        response = await llm_client.generate_dispatcher_decision(
+            system_prompt=prompt,
+            messages=[],
+            temperature=config.orchestrator.dispatcher.assistant_temperature,
+            max_tokens=min(config.orchestrator.dispatcher.assistant_max_tokens, 512),
+            tools=_EMOJI_DISPATCHER_TOOLS,
+            tool_choice="required",
+        )
+        if not response or not response.tool_calls:
+            logger.debug("Emoji dispatcher returned no tool call")
+            return
+
+        executed = 0
+        for tool_call in response.tool_calls[:3]:
+            if tool_call.function_name == "skip_emoji_reaction":
+                logger.debug(f"Emoji dispatcher skipped: {tool_call.arguments.get('reason', '')}")
+                return
+            if tool_call.function_name != "set_msg_emoji_like":
+                continue
+
+            try:
+                msg_id_self = int(tool_call.arguments.get("message_id_self") or 0)
+            except (TypeError, ValueError):
+                logger.warning(f"Emoji dispatcher returned invalid message_id_self={tool_call.arguments.get('message_id_self')}")
+                continue
+            if msg_id_self not in message_id_self_by_index.values():
+                logger.warning(f"Emoji dispatcher selected unknown message_id_self={msg_id_self}")
+                continue
+            emoji_id = str(tool_call.arguments.get("emoji_id") or "")
+            if emoji_id not in {"128027", "128053", "128051"}:
+                logger.warning(f"Emoji dispatcher returned invalid emoji_id={emoji_id}")
+                continue
+            character_name = tool_call.arguments.get("character") or random.choice(self._available_characters)
+            if character_name not in self._available_characters:
+                character_name = random.choice(self._available_characters)
+            await self.dispatch_emoji(
+                group_id,
+                character_name,
+                [{"message_id": msg_id_self, "message_id_self": msg_id_self, "emoji_id": emoji_id}],
+                orchestrator,
+                msg_id_self,
+            )
+            executed += 1
+
+        if executed:
+            logger.info(f"Emoji dispatcher executed {executed} reaction(s) for group {group_id}")
 
     def _build_scheduler_state(self, messages: list[BufferedMessage]) -> str:
         """把机械参数和当前可调度状态显式交给调度模型。"""

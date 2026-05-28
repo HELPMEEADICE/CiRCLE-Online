@@ -700,7 +700,7 @@ class Orchestrator:
             context=context,
             user_message=_build_live_context_reply_prompt(processed_message),
             character_name=character_name,
-            tools=_BAN_TOOL + _EMOJI_TOOL + _ANALYZE_IMAGE_TOOL,
+            tools=_BAN_TOOL + _ANALYZE_IMAGE_TOOL,
         )
 
         if not self._is_group_activity_current(group_id, activity_version, f"after {character_name} generation"):
@@ -1275,7 +1275,7 @@ class Orchestrator:
             context=context,
             user_message=trigger_hint,
             character_name=character_name,
-            tools=_BAN_TOOL + _EMOJI_TOOL + _ANALYZE_IMAGE_TOOL,
+            tools=_BAN_TOOL + _ANALYZE_IMAGE_TOOL,
         )
 
         if not self._is_group_activity_current(group_id, activity_version, f"after {character_name} dispatched generation"):
