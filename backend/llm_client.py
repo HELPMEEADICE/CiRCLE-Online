@@ -147,6 +147,7 @@ class LLMClient:
                     sender_name=msg.sender_name,
                     image_urls=msg.image_urls,
                     message_id=msg.message_id,
+                    message_id_self=msg.message_id_self,
                 ))
                 continue
             normalized.append(msg)

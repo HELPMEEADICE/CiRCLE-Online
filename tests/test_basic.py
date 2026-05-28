@@ -380,6 +380,118 @@ async def test_orchestrator_translates_emoji_message_id_to_action_port():
     assert sent_actions == [("set_msg_emoji_like", {"message_id": 105, "emoji_id": "128051"}, 30.0)]
 
 
+@pytest.mark.asyncio
+async def test_orchestrator_translates_emoji_message_id_self_to_action_port():
+    from backend.llm_client import ToolCall
+    from backend.orchestrator import Orchestrator
+
+    sent_actions = []
+
+    class FakeConnection:
+        async def send_action(self, action, params, timeout=10.0):
+            sent_actions.append((action, params, timeout))
+            return {"status": "ok", "retcode": 0}
+
+    class FakeWebSocketServer:
+        def get_connection(self, port):
+            assert port == 8085
+            return FakeConnection()
+
+    orchestrator = Orchestrator()
+    orchestrator.set_ws_server(FakeWebSocketServer())
+    message_id_self = orchestrator._remember_message_id_aliases("1107527508", {
+        8081: 101,
+        8082: 102,
+        8083: 103,
+        8084: 104,
+        8085: 105,
+    })
+
+    results = await orchestrator._execute_tool_calls([
+        ToolCall(
+            id="call_1",
+            function_name="set_msg_emoji_like",
+            arguments={"message_id_self": message_id_self, "emoji_id": "128051"},
+        )
+    ], "1107527508", 8085)
+
+    assert message_id_self == 1
+    assert results == ["[set_msg_emoji_like] 已添加表情回应 🐳"]
+    assert sent_actions == [("set_msg_emoji_like", {"message_id": 105, "emoji_id": "128051"}, 30.0)]
+
+
+@pytest.mark.asyncio
+async def test_execute_reply_uses_buffered_trigger_message_data_for_emoji_context(monkeypatch):
+    import asyncio
+    from datetime import datetime
+    from backend.llm_client import RoleplayResponse, ToolCall
+    from backend.message_buffer import BufferedMessage
+    import backend.character_manager as character_manager_module
+    import backend.llm_client as llm_client_module
+    from backend.orchestrator import Orchestrator
+
+    dispatched = []
+
+    class FakeSession:
+        session_key = "group_1107527508"
+
+        def get_context_for_character(self, character_name, bot_qq_map):
+            return []
+
+        async def add(self, message):
+            pass
+
+    orchestrator = Orchestrator()
+    orchestrator._assignments = {8081: "户山香澄"}
+
+    async def fake_get_group_session(group_id):
+        return FakeSession()
+
+    async def fake_generate_roleplay_response(character_prompt, context, user_message, character_name="", tools=None):
+        return RoleplayResponse(
+            content="好耶",
+            tool_calls=[
+                ToolCall(
+                    id="call_1",
+                    function_name="set_msg_emoji_like",
+                    arguments={"message_id_self": 1, "emoji_id": "128051"},
+                )
+            ],
+        )
+
+    async def fake_dispatch_emoji_reactions(group_id, character_name, pending_emojis, context_message_id=0):
+        dispatched.append((group_id, character_name, pending_emojis, context_message_id))
+
+    async def fake_send_reply(port, group_id, reply_text):
+        pass
+
+    trigger = BufferedMessage(
+        port=8081,
+        data={"message_id": 101, "_message_ids_by_port": {8081: 101, 8085: 105}},
+        timestamp=datetime.now(),
+        group_id="1107527508",
+        user_id="1183508397",
+        raw_message="谁来了",
+        sender_name="自然常数2.718",
+    )
+
+    monkeypatch.setattr(character_manager_module.character_manager, "get_system_prompt", lambda _: "你是户山香澄")
+    monkeypatch.setattr(llm_client_module.llm_client, "generate_roleplay_response", fake_generate_roleplay_response)
+    monkeypatch.setattr(orchestrator, "_get_group_session", fake_get_group_session)
+    monkeypatch.setattr(orchestrator, "dispatch_emoji_reactions", fake_dispatch_emoji_reactions)
+    monkeypatch.setattr(orchestrator, "_send_reply", fake_send_reply)
+
+    await orchestrator.execute_reply("1107527508", "户山香澄", trigger_message=trigger)
+    await asyncio.sleep(0)
+
+    assert dispatched == [(
+        "1107527508",
+        "户山香澄",
+        [{"message_id": 1, "emoji_id": "128051", "message_id_self": 1}],
+        1,
+    )]
+
+
 def test_orchestrator_sanitizes_emoji_tool_narration():
     from backend.llm_client import ToolCall
     from backend.orchestrator import Orchestrator

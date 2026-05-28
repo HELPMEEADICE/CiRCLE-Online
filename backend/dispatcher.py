@@ -849,9 +849,12 @@ class Dispatcher:
             return
 
         for emoji_call in pending_emojis:
-            raw_id = emoji_call["message_id"]
+            raw_id = emoji_call.get("message_id_self") or emoji_call["message_id"]
             emoji_id = emoji_call["emoji_id"]
-            resolved_id = orchestrator._resolve_message_id_for_port(group_id, raw_id, port)
+            if emoji_call.get("message_id_self"):
+                resolved_id = orchestrator._resolve_message_id_self_for_port(group_id, raw_id, port)
+            else:
+                resolved_id = orchestrator._resolve_message_id_for_port(group_id, raw_id, port)
             result = await orchestrator._execute_emoji_on_port(port, group_id, resolved_id, emoji_id)
             logger.info(f"[EMOJI DISPATCH] character={character_name} port={port} result={result}")
 

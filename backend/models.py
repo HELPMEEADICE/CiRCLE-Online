@@ -76,6 +76,7 @@ class ChatMessage(BaseModel):
     sender_name: Optional[str] = None
     image_urls: Optional[list[str]] = None
     message_id: Optional[int] = None
+    message_id_self: Optional[int] = None
 
 
 class CharacterAssignment(BaseModel):

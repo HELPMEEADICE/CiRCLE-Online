@@ -22,7 +22,7 @@ from backend.database import db
 logger = get_logger("orchestrator")
 
 CONTEXT_COMPRESSION_PATH = Path(__file__).parent.parent / "data" / "Context_Compression.md"
-MESSAGE_ID_SUFFIX_RE = re.compile(r"\s*\[message_id=\d+\]$")
+MESSAGE_ID_SUFFIX_RE = re.compile(r"\s*\[message_id(?:_self)?=\d+\]$")
 
 
 def load_context_compression(session_key: str) -> str:
@@ -402,7 +402,11 @@ _EMOJI_TOOL = [{
             "properties": {
                 "message_id": {
                     "type": "integer",
-                    "description": "要回应的消息ID",
+                    "description": "兼容旧参数：要回应的消息ID。优先使用 message_id_self。",
+                },
+                "message_id_self": {
+                    "type": "integer",
+                    "description": "要回应的消息内部ID。只能填写聊天记录中 [message_id_self=数字] 里的数字，不要填写其他ID。",
                 },
                 "emoji_id": {
                     "type": "string",
@@ -410,7 +414,7 @@ _EMOJI_TOOL = [{
                     "enum": ["128027", "128053", "128051"],
                 },
             },
-            "required": ["message_id", "emoji_id"],
+            "required": ["message_id_self", "emoji_id"],
         },
     },
 }]
@@ -434,10 +438,14 @@ _ANALYZE_IMAGE_TOOL = [{
                 },
                 "message_id": {
                     "type": "integer",
-                    "description": "图片所在消息的ID，用于将解析结果关联到正确的消息",
+                    "description": "兼容旧参数：图片所在消息的ID。优先使用 message_id_self。",
+                },
+                "message_id_self": {
+                    "type": "integer",
+                    "description": "图片所在消息的内部ID，即聊天记录中 [message_id_self=数字] 里的数字。",
                 },
             },
-            "required": ["image_url", "message_id"],
+            "required": ["image_url", "message_id_self"],
         },
     },
 }]
@@ -470,6 +478,9 @@ class Orchestrator:
         self._group_sessions: dict[str, SessionMemory] = {}
         self._private_sessions: dict[str, SessionMemory] = {}
         self._message_id_aliases: dict[str, dict[int, dict[int, int]]] = defaultdict(dict)
+        self._message_id_self_counters: dict[str, int] = defaultdict(int)
+        self._message_id_self_by_actual: dict[str, dict[int, int]] = defaultdict(dict)
+        self._message_ids_by_self: dict[str, dict[int, dict[int, int]]] = defaultdict(dict)
         self._ws_server = None
         self._load_assignments()
 
@@ -599,7 +610,7 @@ class Orchestrator:
         group_id = str(data.get("group_id", ""))
         user_id = str(data.get("user_id", ""))
         message_id = data.get("message_id", 0)
-        self._remember_message_id_aliases(group_id, data.get("_message_ids_by_port"), port, message_id)
+        message_id_self = self._remember_message_id_aliases(group_id, data.get("_message_ids_by_port"), port, message_id)
         message_segments = data.get("message", [])
         raw_message = data.get("raw_message", "")
 
@@ -648,7 +659,7 @@ class Orchestrator:
             display_content = f"[Poppin'Party成员] {sender_name}: {processed_message}"
         if image_placeholders:
             display_content = f"{display_content} {' '.join(image_placeholders)}"
-        display_content = f"{display_content} [message_id={message_id}]"
+        display_content = f"{display_content} [message_id_self={message_id_self}]"
 
         # 存储图片URL到ChatMessage，供后续工具调用使用
         await session.add(ChatMessage(
@@ -662,6 +673,7 @@ class Orchestrator:
             sender_name=sender_name,
             image_urls=image_urls if image_urls else None,
             message_id=message_id,
+            message_id_self=message_id_self,
         ))
 
         if not should_reply:
@@ -699,10 +711,10 @@ class Orchestrator:
             pending_emojis = []
             if response.tool_calls:
                 self._remember_message_id_aliases(group_id, data.get("_message_ids_by_port"), port, message_id)
-                tool_results = await self._execute_tool_calls(response.tool_calls, group_id, port, is_private=False, context_message_id=message_id, pending_emojis=pending_emojis)
+                tool_results = await self._execute_tool_calls(response.tool_calls, group_id, port, is_private=False, context_message_id=message_id_self, pending_emojis=pending_emojis)
 
             if pending_emojis:
-                asyncio.create_task(self.dispatch_emoji_reactions(group_id, character_name, pending_emojis, message_id))
+                asyncio.create_task(self.dispatch_emoji_reactions(group_id, character_name, pending_emojis, message_id_self))
 
             reply_text = await self._resolve_group_reply_text(
                 response=response,
@@ -831,7 +843,7 @@ class Orchestrator:
 
         return random.random() < config.orchestrator.group_reply_probability
 
-    def _remember_message_id_aliases(self, group_id: str, aliases: dict | None, port: int = 0, message_id: int = 0):
+    def _remember_message_id_aliases(self, group_id: str, aliases: dict | None, port: int = 0, message_id: int = 0) -> int:
         normalized: dict[int, int] = {}
         if aliases:
             for alias_port, alias_message_id in aliases.items():
@@ -845,7 +857,7 @@ class Orchestrator:
         if port and message_id:
             normalized[int(port)] = int(message_id)
         if not group_id or not normalized:
-            return
+            return 0
 
         group_aliases = self._message_id_aliases[group_id]
         if len(group_aliases) > 1000:
@@ -853,6 +865,29 @@ class Orchestrator:
                 group_aliases.pop(old_id, None)
         for alias_message_id in normalized.values():
             group_aliases[alias_message_id] = normalized
+
+        actual_to_self = self._message_id_self_by_actual[group_id]
+        message_id_self = 0
+        for alias_message_id in normalized.values():
+            message_id_self = actual_to_self.get(alias_message_id, 0)
+            if message_id_self:
+                break
+        if not message_id_self:
+            self._message_id_self_counters[group_id] += 1
+            message_id_self = self._message_id_self_counters[group_id]
+
+        for alias_message_id in normalized.values():
+            actual_to_self[alias_message_id] = message_id_self
+        self._message_ids_by_self[group_id][message_id_self] = normalized
+        return message_id_self
+
+    def _resolve_message_id_self_for_port(self, group_id: str, message_id_self: int, port: int) -> int:
+        if not message_id_self:
+            return 0
+        aliases = self._message_ids_by_self.get(group_id, {}).get(int(message_id_self))
+        if not aliases:
+            return int(message_id_self)
+        return aliases.get(port) or next(iter(aliases.values()))
 
     def _resolve_message_id_for_port(self, group_id: str, message_id: int, port: int) -> int:
         if not message_id:
@@ -994,21 +1029,29 @@ class Orchestrator:
                             results.append(f"[set_group_ban] 执行异常: {e}")
                             logger.error(f"[BAN ERROR] group={target_group} user={target_user} duration={duration} error={e}")
             elif tc.function_name == "set_msg_emoji_like":
-                msg_id = context_message_id or tc.arguments.get("message_id", 0)
+                msg_id_self = tc.arguments.get("message_id_self", 0)
+                uses_self_id = bool(msg_id_self or context_message_id)
+                msg_id = msg_id_self or context_message_id or tc.arguments.get("message_id", 0)
                 emoji_id = tc.arguments.get("emoji_id", "")
                 if not msg_id or not emoji_id:
                     results.append(f"[set_msg_emoji_like] 缺少参数")
                     continue
                 if pending_emojis is not None:
-                    pending_emojis.append({"message_id": int(msg_id), "emoji_id": emoji_id})
+                    emoji_call = {"message_id": int(msg_id), "emoji_id": emoji_id}
+                    if uses_self_id:
+                        emoji_call["message_id_self"] = int(msg_id)
+                    pending_emojis.append(emoji_call)
                     results.append(f"[set_msg_emoji_like] 已加入待执行队列")
                 else:
-                    resolved_id = self._resolve_message_id_for_port(group_id, int(msg_id), port)
+                    if msg_id_self:
+                        resolved_id = self._resolve_message_id_self_for_port(group_id, int(msg_id_self), port)
+                    else:
+                        resolved_id = self._resolve_message_id_for_port(group_id, int(msg_id), port)
                     result = await self._execute_emoji_on_port(port, group_id, resolved_id, emoji_id)
                     results.append(result)
             elif tc.function_name == "analyze_image":
                 image_url = tc.arguments.get("image_url", "")
-                message_id = tc.arguments.get("message_id", 0)
+                message_id = tc.arguments.get("message_id_self", 0) or tc.arguments.get("message_id", 0)
                 if not image_url:
                     results.append(f"[analyze_image] 缺少image_url参数")
                     continue
@@ -1072,9 +1115,12 @@ class Orchestrator:
                     logger.warning(f"[EMOJI DISPATCH] No port for character {character_name}")
                     return
                 for emoji_call in pending_emojis:
-                    raw_id = emoji_call["message_id"]
+                    raw_id = emoji_call.get("message_id_self") or emoji_call["message_id"]
                     emoji_id = emoji_call["emoji_id"]
-                    resolved_id = self._resolve_message_id_for_port(group_id, raw_id, port)
+                    if emoji_call.get("message_id_self"):
+                        resolved_id = self._resolve_message_id_self_for_port(group_id, raw_id, port)
+                    else:
+                        resolved_id = self._resolve_message_id_for_port(group_id, raw_id, port)
                     await self._execute_emoji_on_port(port, group_id, resolved_id, emoji_id)
         except Exception as e:
             logger.error(f"[EMOJI DISPATCH] Error dispatching emoji reactions: {e}")
@@ -1142,7 +1188,7 @@ class Orchestrator:
         # 1. 批量记录所有消息到 SessionMemory
         for msg in messages:
             message_id = msg.data.get('message_id', 0)
-            self._remember_message_id_aliases(
+            message_id_self = self._remember_message_id_aliases(
                 group_id,
                 msg.data.get("_message_ids_by_port"),
                 msg.port,
@@ -1165,7 +1211,7 @@ class Orchestrator:
                 display_content = f"[Poppin'Party成员] {bot_character}: {msg.raw_message}"
             if image_placeholders:
                 display_content = f"{display_content} {' '.join(image_placeholders)}"
-            display_content = f"{display_content} [message_id={message_id}]"
+            display_content = f"{display_content} [message_id_self={message_id_self}]"
             
             # 记录到 SessionMemory
             await session.add(ChatMessage(
@@ -1179,6 +1225,7 @@ class Orchestrator:
                 sender_name=msg.sender_name,
                 image_urls=msg.image_urls if msg.image_urls else None,
                 message_id=message_id,
+                message_id_self=message_id_self,
             ))
         
         logger.info(f"Recorded {len(messages)} messages for group {group_id}")
@@ -1240,7 +1287,14 @@ class Orchestrator:
             if response.tool_calls:
                 tool_results = await self._execute_tool_calls(response.tool_calls, group_id, port, is_private=False, pending_emojis=pending_emojis)
 
-            trigger_msg_id = trigger_message.message_id if trigger_message else 0
+            trigger_msg_id = 0
+            if trigger_message:
+                trigger_msg_id = self._remember_message_id_aliases(
+                    group_id,
+                    trigger_message.data.get("_message_ids_by_port"),
+                    trigger_message.port,
+                    trigger_message.data.get("message_id", 0),
+                )
             if pending_emojis:
                 asyncio.create_task(self.dispatch_emoji_reactions(group_id, character_name, pending_emojis, trigger_msg_id))
 
