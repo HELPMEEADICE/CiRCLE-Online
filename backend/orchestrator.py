@@ -1381,7 +1381,11 @@ class Orchestrator:
             system_prompt = _append_untrusted_summary(system_prompt, compression_context)
 
         context = session.get_context_for_character(initiating_char, self._bot_qq_map)
-        initiation_prompt = f"请以{initiating_char}的身份，根据当前对话上下文，主动发起一个新的对话话题或回应之前的对话。保持角色性格特点，回复要自然、简洁。"
+        initiation_prompt = (
+            f"请以{initiating_char}的身份，根据当前对话上下文自然地接话。"
+            "只回应已有的话题，不要主动发起新话题，不要编造任何事件、日程、计划或场景。"
+            "如果没有可接的话题就不要说话。保持角色性格特点，回复要自然、简洁。"
+        )
 
         response = await llm_client.generate_roleplay_response(
             character_prompt=system_prompt,
