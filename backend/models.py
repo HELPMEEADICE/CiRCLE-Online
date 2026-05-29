@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, Any
+from typing import Optional
 from enum import Enum
 from datetime import datetime
 
@@ -28,42 +28,6 @@ class CharacterInfo(BaseModel):
     avatar: Optional[str] = None
 
 
-class OneBotAction(BaseModel):
-    action: str
-    params: dict[str, Any] = {}
-    echo: Optional[str] = None
-
-
-class OneBotResponse(BaseModel):
-    status: str = "ok"
-    retcode: int = 0
-    data: Any = None
-    message: str = ""
-    echo: Optional[str] = None
-
-
-class OneBotEvent(BaseModel):
-    time: int = 0
-    self_id: str = ""
-    post_type: str = ""
-    sub_type: Optional[str] = None
-    raw_data: dict[str, Any] = {}
-
-
-class MessageEvent(OneBotEvent):
-    message_id: Optional[int] = None
-    user_id: Optional[str] = None
-    group_id: Optional[str] = None
-    message_type: str = ""
-    message: list[dict[str, Any]] = []
-    raw_message: str = ""
-    font: int = 0
-
-
-class LifecycleEvent(OneBotEvent):
-    pass
-
-
 class ChatMessage(BaseModel):
     role: str
     content: str
@@ -84,13 +48,4 @@ class CharacterAssignment(BaseModel):
     character_name: str
 
 
-class OrchestratorState(BaseModel):
-    enabled: bool = True
-    ports: dict[int, PortInfo] = {}
-    characters: list[CharacterInfo] = []
-    assignments: dict[int, str] = {}
 
-
-class DashboardData(BaseModel):
-    state: OrchestratorState
-    recent_messages: list[ChatMessage] = []

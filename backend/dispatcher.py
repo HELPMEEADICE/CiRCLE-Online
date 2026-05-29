@@ -802,47 +802,6 @@ class Dispatcher:
             logger.debug(f"Failed to check schedulable state: {e}")
         return True
     
-    def _parse_decision(self, response: str) -> DispatcherDecision:
-        """解析辅助模型的 JSON 输出"""
-        try:
-            # 尝试提取 JSON
-            json_str = response
-            
-            # 如果 response 包含 ```json ... ```，提取其中的 JSON
-            if "```json" in response:
-                start = response.index("```json") + 7
-                end = response.index("```", start)
-                json_str = response[start:end].strip()
-            elif "```" in response:
-                start = response.index("```") + 3
-                end = response.index("```", start)
-                json_str = response[start:end].strip()
-            
-            data = json.loads(json_str)
-            
-            # 解析 tool_calls
-            tool_calls = []
-            for tc in data.get("tool_calls", []):
-                tool_calls.append(ToolCall(
-                    id=f"dispatcher_{datetime.now().timestamp()}",
-                    function_name=tc.get("function", ""),
-                    arguments=tc.get("arguments", {}),
-                ))
-            
-            return DispatcherDecision(
-                action=data.get("action", "skip"),
-                character=data.get("character"),
-                characters=data.get("characters", []),
-                tool_calls=tool_calls,
-                strategy=data.get("strategy"),
-                reason=data.get("reason", ""),
-                chat_state=data.get("chat_state", "active"),
-            )
-            
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
-            logger.warning(f"Failed to parse assistant response: {e}\nResponse: {response}")
-            return self._create_skip_decision(f"JSON解析失败: {e}")
-    
     def _create_skip_decision(self, reason: str) -> DispatcherDecision:
         """创建 skip 决策"""
         return DispatcherDecision(

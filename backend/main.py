@@ -1,4 +1,3 @@
-import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from pydantic import BaseModel
@@ -6,7 +5,7 @@ from fastapi import FastAPI, WebSocket, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 from backend.config import config, load_config, save_config, load_port_assignments, save_port_assignments, init_config
-from backend.models import CharacterAssignment, OrchestratorState
+from backend.models import CharacterAssignment
 from backend.websocket_server import MultiPortWebSocketServer
 from backend.napcat_handler import NapCatMessageHandler
 from backend.orchestrator import init_orchestrator

@@ -1,7 +1,7 @@
 import time
 from datetime import datetime
 from typing import Optional, Callable
-from backend.models import MessageEvent, ChatMessage
+from backend.models import ChatMessage
 from backend.utils import (
     get_logger,
     parse_message_text,

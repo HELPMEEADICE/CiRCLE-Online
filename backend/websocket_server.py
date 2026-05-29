@@ -1,7 +1,7 @@
 import asyncio
 import json
 import uuid
-from typing import Optional, Callable, Any
+from typing import Optional, Callable
 from fastapi import WebSocket, WebSocketDisconnect
 from backend.models import ConnectionStatus, PortInfo
 from backend.utils import get_logger
@@ -148,7 +148,6 @@ class MultiPortWebSocketServer:
         if not required_token:
             return True
 
-        path = str(websocket.url.path) if websocket.url else "/"
         headers = websocket.headers
 
         query_string = str(websocket.url.query_string) if websocket.url else ""
@@ -243,25 +242,6 @@ class MultiPortWebSocketServer:
             except Exception as e:
                 logger.error(f"Event handler error: {e}")
 
-    async def send_to_port(self, port: int, action: str, params: dict = None,
-                           timeout: float = 10.0) -> Optional[dict]:
-        conn = self.connections.get(port)
-        if not conn:
-            logger.warning(f"No connection on port {port}")
-            return None
-        return await conn.send_action(action, params, timeout=timeout)
-
-    async def broadcast(self, action: str, params: dict = None):
-        for port, conn in self.connections.items():
-            if conn:
-                try:
-                    await conn.send_action(action, params, timeout=0)
-                except Exception as e:
-                    logger.error(f"Broadcast error on port {port}: {e}")
-
-    def is_connected(self, port: int) -> bool:
-        return self.connections.get(port) is not None
-
     def get_connection(self, port: int) -> Optional[NapCatConnection]:
         return self.connections.get(port)
 
@@ -330,7 +310,6 @@ class MultiPortWebSocketServer:
             return True
 
         # 从查询参数获取token
-        path = websocket.request.path if websocket.request else "/"
         query = websocket.request.headers.get("Query-String", "") if websocket.request else ""
         
         # 解析查询参数

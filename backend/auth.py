@@ -39,8 +39,3 @@ def revoke_token(token: Optional[str]) -> None:
         _sessions.pop(token, None)
 
 
-def cleanup_expired() -> None:
-    now = time.time()
-    expired = [t for t, exp in _sessions.items() if now > exp]
-    for t in expired:
-        _sessions.pop(t, None)

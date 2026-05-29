@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import threading
-from typing import Optional
 
 from backend.models import ChatMessage
 from backend.utils import get_logger

@@ -108,16 +108,6 @@ class ChatDatabase:
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
-    async def delete_messages_before_id(self, session_key: str, keep_from_id: int):
-        if not self._db:
-            raise RuntimeError("Database not initialized")
-
-        await self._db.execute(
-            "DELETE FROM messages WHERE session_key = ? AND id < ?",
-            (session_key, keep_from_id),
-        )
-        await self._db.commit()
-
     async def delete_messages_by_ids(self, ids: list[int]):
         if not self._db or not ids:
             return
@@ -136,16 +126,6 @@ class ChatDatabase:
             "DELETE FROM messages WHERE session_key = ?", (session_key,)
         )
         await self._db.commit()
-
-    async def get_session_count(self, session_key: str) -> int:
-        if not self._db:
-            return 0
-
-        cursor = await self._db.execute(
-            "SELECT COUNT(*) FROM messages WHERE session_key = ?", (session_key,)
-        )
-        row = await cursor.fetchone()
-        return row[0] if row else 0
 
     async def save_compression_marker(self, session_key: str, marker_message_id: int) -> int:
         if not self._db:

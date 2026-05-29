@@ -136,14 +136,6 @@ class MessageBuffer:
             "buffer_sizes": {gid: len(msgs) for gid, msgs in self._buffers.items()},
             "stats": self._stats.copy(),
         }
-    
-    def clear(self):
-        """清空所有缓冲区"""
-        for timer in self._timers.values():
-            timer.cancel()
-        self._timers.clear()
-        self._buffers.clear()
-        logger.info("Message buffer cleared")
 
 
 # 全局实例
@@ -162,9 +154,4 @@ def init_message_buffer(
         max_size=max_size,
         on_flush=on_flush,
     )
-    return _message_buffer
-
-
-def get_message_buffer() -> Optional[MessageBuffer]:
-    """获取全局消息缓冲区"""
     return _message_buffer

@@ -236,7 +236,3 @@ def resolve_at_mentions(raw_message: str, character_names: list[str], bot_qq_map
 
 def build_text_message(text: str) -> list[dict]:
     return [{"type": "text", "data": {"text": text}}]
-
-
-def timestamp_now() -> int:
-    return int(datetime.now().timestamp())

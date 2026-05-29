@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from backend.llm_client import RoleplayResponse
-from backend.models import ChatMessage, CharacterAssignment
+from backend.models import ChatMessage
 from backend.config import config, load_port_assignments, save_port_assignments
 from backend.token_counter import count_message_tokens, count_single_message_tokens, truncate_messages_to_token_budget
 from backend.utils import (
@@ -314,9 +314,6 @@ class SessionMemory:
             == (right.raw_content if right.raw_content is not None else MESSAGE_ID_SUFFIX_RE.sub("", right.content))
             and normalize_media_identity_values(left.image_urls) == normalize_media_identity_values(right.image_urls)
         )
-
-    def get_token_count(self) -> int:
-        return self._total_tokens
 
     async def clear(self):
         self.messages.clear()
@@ -1477,12 +1474,6 @@ class Orchestrator:
             self._chain_counters[group_id][initiating_char] = 0
             await self.handle_ai_reply(char_port, group_id, initiating_char, response.content, depth=0)
 
-    def reset_chain_counters(self, group_id: str = None):
-        if group_id:
-            self._chain_counters[group_id].clear()
-        else:
-            self._chain_counters.clear()
-
     async def start_initiation_task(self):
         if not config.orchestrator.auto_dialogue.enabled:
             return
@@ -1536,12 +1527,6 @@ class Orchestrator:
             except Exception as e:
                 logger.error(f"Failed to send private reply: {e}")
 
-    def get_session_messages(self, session_key: str, count: int = 20) -> list[ChatMessage]:
-        for sessions in (self._group_sessions, self._private_sessions):
-            session = sessions.get(session_key)
-            if session:
-                return session.get_context(count)
-        return []
 
 
 _orchestrator = None
