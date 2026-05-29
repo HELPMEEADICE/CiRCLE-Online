@@ -457,7 +457,7 @@ class Dispatcher:
             return
 
         await asyncio.gather(
-            self._dispatch_emoji_tools(group_id, messages),
+            self._dispatch_emoji_tools(group_id, messages) if config.orchestrator.tools.emoji_reaction else asyncio.sleep(0),
             self._dispatch_dialogue(group_id, messages),
         )
 

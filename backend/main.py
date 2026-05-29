@@ -367,6 +367,11 @@ async def get_config():
             "prompt_prefix": cfg.orchestrator.prompt_prefix,
             "prompt_suffix": cfg.orchestrator.prompt_suffix,
             "time_awareness": cfg.orchestrator.time_awareness,
+            "tools": {
+                "emoji_reaction": cfg.orchestrator.tools.emoji_reaction,
+                "ban": cfg.orchestrator.tools.ban,
+                "image_analysis": cfg.orchestrator.tools.image_analysis,
+            },
             "auto_dialogue": {
                 "enabled": cfg.orchestrator.auto_dialogue.enabled,
                 "chain_length": cfg.orchestrator.auto_dialogue.chain_length,
@@ -432,6 +437,12 @@ class VisionConfigUpdate(BaseModel):
     thinking: str = None
 
 
+class ToolsConfigUpdate(BaseModel):
+    emoji_reaction: bool = None
+    ban: bool = None
+    image_analysis: bool = None
+
+
 class OrchestratorConfigUpdate(BaseModel):
     enabled: bool = None
     reply_delay_ms: int = None
@@ -441,6 +452,7 @@ class OrchestratorConfigUpdate(BaseModel):
     prompt_prefix: str = None
     prompt_suffix: str = None
     time_awareness: bool = None
+    tools: ToolsConfigUpdate = None
 
 
 class ChatConfigUpdate(BaseModel):
@@ -529,6 +541,13 @@ async def update_config(update: ConfigUpdate):
             current.orchestrator.prompt_suffix = update.orchestrator.prompt_suffix
         if update.orchestrator.time_awareness is not None:
             current.orchestrator.time_awareness = update.orchestrator.time_awareness
+        if update.orchestrator.tools:
+            if update.orchestrator.tools.emoji_reaction is not None:
+                current.orchestrator.tools.emoji_reaction = update.orchestrator.tools.emoji_reaction
+            if update.orchestrator.tools.ban is not None:
+                current.orchestrator.tools.ban = update.orchestrator.tools.ban
+            if update.orchestrator.tools.image_analysis is not None:
+                current.orchestrator.tools.image_analysis = update.orchestrator.tools.image_analysis
 
     if update.chat:
         if update.chat.admin_qq is not None:
@@ -547,6 +566,7 @@ async def update_config(update: ConfigUpdate):
     config.llm.__dict__.update(current.llm.__dict__)
     config.llm.vision.__dict__.update(current.llm.vision.__dict__)
     config.orchestrator.__dict__.update(current.orchestrator.__dict__)
+    config.orchestrator.tools.__dict__.update(current.orchestrator.tools.__dict__)
     config.orchestrator.auto_dialogue.__dict__.update(current.orchestrator.auto_dialogue.__dict__)
     config.orchestrator.context_compression.__dict__.update(current.orchestrator.context_compression.__dict__)
     config.orchestrator.buffer.__dict__.update(current.orchestrator.buffer.__dict__)
@@ -605,6 +625,7 @@ async def update_auto_dialogue_config(update: AutoDialogueConfigUpdate):
     config.llm.__dict__.update(current.llm.__dict__)
     config.llm.vision.__dict__.update(current.llm.vision.__dict__)
     config.orchestrator.__dict__.update(current.orchestrator.__dict__)
+    config.orchestrator.tools.__dict__.update(current.orchestrator.tools.__dict__)
     config.orchestrator.auto_dialogue.__dict__.update(current.orchestrator.auto_dialogue.__dict__)
     config.orchestrator.context_compression.__dict__.update(current.orchestrator.context_compression.__dict__)
     config.chat.__dict__.update(current.chat.__dict__)
@@ -652,6 +673,7 @@ async def update_chat_config(update: ChatConfigUpdate):
     config.llm.__dict__.update(current.llm.__dict__)
     config.llm.vision.__dict__.update(current.llm.vision.__dict__)
     config.orchestrator.__dict__.update(current.orchestrator.__dict__)
+    config.orchestrator.tools.__dict__.update(current.orchestrator.tools.__dict__)
     config.orchestrator.auto_dialogue.__dict__.update(current.orchestrator.auto_dialogue.__dict__)
     config.orchestrator.context_compression.__dict__.update(current.orchestrator.context_compression.__dict__)
     config.orchestrator.buffer.__dict__.update(current.orchestrator.buffer.__dict__)

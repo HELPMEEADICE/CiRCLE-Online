@@ -81,6 +81,13 @@ class DispatcherConfig(BaseSettings):
     dispatcher_prompt: str = ""
 
 
+class ToolsConfig(BaseSettings):
+    """工具开关配置"""
+    emoji_reaction: bool = True
+    ban: bool = True
+    image_analysis: bool = True
+
+
 class OrchestratorConfig(BaseSettings):
     enabled: bool = True
     reply_delay_ms: int = 1000
@@ -90,6 +97,7 @@ class OrchestratorConfig(BaseSettings):
     prompt_prefix: str = ""
     prompt_suffix: str = ""
     time_awareness: bool = False
+    tools: ToolsConfig = Field(default_factory=ToolsConfig)
     auto_dialogue: AutoDialogueConfig = Field(default_factory=AutoDialogueConfig)
     context_compression: ContextCompressionConfig = Field(default_factory=ContextCompressionConfig)
     buffer: BufferConfig = Field(default_factory=BufferConfig)
@@ -134,7 +142,10 @@ def load_config() -> AppConfig:
     vision_cfg = VisionModelConfig(**vision_raw)
     llm_cfg = LLMConfig(**llm_raw, vision=vision_cfg)
 
-    orchestrator_cfg = OrchestratorConfig(**raw.get("orchestrator", {}))
+    orchestrator_raw = raw.get("orchestrator", {})
+    tools_raw = orchestrator_raw.pop("tools", {})
+    tools_cfg = ToolsConfig(**tools_raw)
+    orchestrator_cfg = OrchestratorConfig(**orchestrator_raw, tools=tools_cfg)
     chat_cfg = ChatConfig(**raw.get("chat", {}))
     logging_cfg = LoggingConfig(**raw.get("logging", {}))
 
@@ -217,6 +228,12 @@ def save_config(app_config: AppConfig):
     lines.append(f"time_awareness = {'true' if app_config.orchestrator.time_awareness else 'false'}")
     lines.append("")
 
+    lines.append("[orchestrator.tools]")
+    lines.append(f"emoji_reaction = {'true' if app_config.orchestrator.tools.emoji_reaction else 'false'}")
+    lines.append(f"ban = {'true' if app_config.orchestrator.tools.ban else 'false'}")
+    lines.append(f"image_analysis = {'true' if app_config.orchestrator.tools.image_analysis else 'false'}")
+    lines.append("")
+
     lines.append("[orchestrator.context_compression]")
     lines.append(f"enabled = {'true' if app_config.orchestrator.context_compression.enabled else 'false'}")
     lines.append(f"target_tokens = {app_config.orchestrator.context_compression.target_tokens}")
@@ -273,6 +290,7 @@ def init_config():
     config.llm.__dict__.update(loaded.llm.__dict__)
     config.llm.vision.__dict__.update(loaded.llm.vision.__dict__)
     config.orchestrator.__dict__.update(loaded.orchestrator.__dict__)
+    config.orchestrator.tools.__dict__.update(loaded.orchestrator.tools.__dict__)
     config.orchestrator.auto_dialogue.__dict__.update(loaded.orchestrator.auto_dialogue.__dict__)
     config.orchestrator.context_compression.__dict__.update(loaded.orchestrator.context_compression.__dict__)
     config.orchestrator.buffer.__dict__.update(loaded.orchestrator.buffer.__dict__)

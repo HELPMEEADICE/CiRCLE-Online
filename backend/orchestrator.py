@@ -451,6 +451,18 @@ _ANALYZE_IMAGE_TOOL = [{
 }]
 
 
+def _get_enabled_tools(include_ban: bool = True, include_emoji: bool = True, include_image: bool = True) -> list[dict]:
+    """根据配置返回当前启用的工具列表。"""
+    tools = []
+    if include_ban and config.orchestrator.tools.ban:
+        tools += _BAN_TOOL
+    if include_emoji and config.orchestrator.tools.emoji_reaction:
+        tools += _EMOJI_TOOL
+    if include_image and config.orchestrator.tools.image_analysis:
+        tools += _ANALYZE_IMAGE_TOOL
+    return tools
+
+
 def _build_live_context_reply_prompt(trigger_message: str) -> str:
     return (
         "你原本是被这条消息触发准备回复："
@@ -700,7 +712,7 @@ class Orchestrator:
             context=context,
             user_message=_build_live_context_reply_prompt(processed_message),
             character_name=character_name,
-            tools=_BAN_TOOL + _ANALYZE_IMAGE_TOOL,
+            tools=_get_enabled_tools(include_ban=True, include_emoji=False, include_image=True),
         )
 
         if not self._is_group_activity_current(group_id, activity_version, f"after {character_name} generation"):
@@ -800,7 +812,7 @@ class Orchestrator:
             context=context,
             user_message=raw_message,
             character_name=character_name,
-            tools=_ANALYZE_IMAGE_TOOL,
+            tools=_get_enabled_tools(include_ban=False, include_emoji=False, include_image=True),
         )
 
         if response:
@@ -1275,7 +1287,7 @@ class Orchestrator:
             context=context,
             user_message=trigger_hint,
             character_name=character_name,
-            tools=_BAN_TOOL + _ANALYZE_IMAGE_TOOL,
+            tools=_get_enabled_tools(include_ban=True, include_emoji=False, include_image=True),
         )
 
         if not self._is_group_activity_current(group_id, activity_version, f"after {character_name} dispatched generation"):

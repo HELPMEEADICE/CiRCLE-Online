@@ -231,6 +231,60 @@
 
                         <div class="settings-card">
                             <div class="settings-card-header">
+                                <span class="material-icons-round">build</span>
+                                <div>
+                                    <h3>工具开关</h3>
+                                    <p class="settings-subtitle">控制 AI 角色可用的工具能力</p>
+                                </div>
+                            </div>
+                            <div class="settings-body">
+                                <div class="md3-field">
+                                    <div class="md3-switch-row">
+                                        <div>
+                                            <label class="md3-label">贴表情</label>
+                                            <span class="md3-helper" style="margin-top:4px">允许 AI 给消息添加表情回应</span>
+                                        </div>
+                                        <label class="md3-switch">
+                                            <input type="checkbox" id="cfg-tools_emoji_reaction">
+                                            <span class="slider"></span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="md3-field">
+                                    <div class="md3-switch-row">
+                                        <div>
+                                            <label class="md3-label">禁言</label>
+                                            <span class="md3-helper" style="margin-top:4px">允许 AI 对群内用户执行禁言操作</span>
+                                        </div>
+                                        <label class="md3-switch">
+                                            <input type="checkbox" id="cfg-tools_ban">
+                                            <span class="slider"></span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="md3-field">
+                                    <div class="md3-switch-row">
+                                        <div>
+                                            <label class="md3-label">图片解析</label>
+                                            <span class="md3-helper" style="margin-top:4px">允许 AI 调用视觉模型解析图片内容</span>
+                                        </div>
+                                        <label class="md3-switch">
+                                            <input type="checkbox" id="cfg-tools_image_analysis">
+                                            <span class="slider"></span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="settings-actions">
+                                    <button class="md3-btn md3-btn-filled" onclick="app.saveToolsConfig()">
+                                        <span class="material-icons-round">save</span>
+                                        保存工具配置
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="settings-card">
+                            <div class="settings-card-header">
                                 <span class="material-icons-round">auto_awesome</span>
                                 <div>
                                     <h3>自动对话配置</h3>

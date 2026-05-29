@@ -365,6 +365,15 @@ class CircleOnlineApp {
         const timeAware = document.getElementById('cfg-time_awareness');
         if (timeAware) timeAware.checked = c.orchestrator.time_awareness;
 
+        if (c.orchestrator.tools) {
+            const emojiToggle = document.getElementById('cfg-tools_emoji_reaction');
+            if (emojiToggle) emojiToggle.checked = c.orchestrator.tools.emoji_reaction;
+            const banToggle = document.getElementById('cfg-tools_ban');
+            if (banToggle) banToggle.checked = c.orchestrator.tools.ban;
+            const imageToggle = document.getElementById('cfg-tools_image_analysis');
+            if (imageToggle) imageToggle.checked = c.orchestrator.tools.image_analysis;
+        }
+
         if (c.orchestrator.auto_dialogue) {
             const autoEnabled = document.getElementById('cfg-auto_dialogue_enabled');
             if (autoEnabled) {
@@ -471,6 +480,19 @@ class CircleOnlineApp {
             },
         };
         await this.saveConfig(payload, '提示词配置已保存');
+    }
+
+    async saveToolsConfig() {
+        const payload = {
+            orchestrator: {
+                tools: {
+                    emoji_reaction: document.getElementById('cfg-tools_emoji_reaction')?.checked ?? null,
+                    ban: document.getElementById('cfg-tools_ban')?.checked ?? null,
+                    image_analysis: document.getElementById('cfg-tools_image_analysis')?.checked ?? null,
+                },
+            },
+        };
+        await this.saveConfig(payload, '工具配置已保存');
     }
 
     async saveAutoDialogueConfig() {
